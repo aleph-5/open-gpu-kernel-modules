@@ -39,6 +39,7 @@
 #include "uvm_mem.h"
 #include "uvm_kvmalloc.h"
 #include "uvm_test_file.h"
+// #include "uvm_dirty_track.h"
 
 #define NVIDIA_UVM_DEVICE_NAME          "nvidia-uvm"
 
@@ -993,6 +994,16 @@ static NV_STATUS uvm_api_pageable_mem_access(UVM_PAGEABLE_MEM_ACCESS_PARAMS *par
     return NV_OK;
 }
 
+/* NV_STATUS uvm_api_dirty_tracking_begin(UVM_DIRTY_TRACKING_BEGIN_PARAMS *params, */
+/*                                         struct file *filp) */
+/* { */
+/*     uvm_va_space_t *va_space = uvm_va_space_get(filp); */
+/*     /1* return uvm_dirty_tracking_invalidate_all_gpu(va_space); *1/ */
+/*     NV_STATUS status = uvm_dirty_tracking_invalidate_all_gpu(va_space); */
+/*     params->rmStatus = status; */
+/*     return status; */
+/* } */
+
 static long uvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     switch (cmd)
@@ -1046,6 +1057,7 @@ static long uvm_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_TOOLS_GET_PROCESSOR_UUID_TABLE_V2,uvm_api_tools_get_processor_uuid_table_v2);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_ALLOC_DEVICE_P2P,               uvm_api_alloc_device_p2p);
         UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_CLEAR_ALL_ACCESS_COUNTERS,      uvm_api_clear_all_access_counters);
+        /* UVM_ROUTE_CMD_STACK_INIT_CHECK(UVM_DIRTY_TRACKING_BEGIN,           uvm_api_dirty_tracking_begin); */
     }
 
     // Try the test ioctls if none of the above matched

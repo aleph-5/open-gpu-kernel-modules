@@ -1,0 +1,31 @@
+#ifndef __UVM_DIRTY_TRACK_H__
+#define __UVM_DIRTY_TRACK_H__
+
+#include "uvm_common.h"
+#include "uvm_va_space.h"
+#include "uvm_forward_decl.h"
+#include "uvm_ioctl.h"
+#include <linux/xarray.h>
+#include <linux/spinlock.h>
+
+
+// Page states stored in the xarray
+#define UVM_DIRTY_PAGE_SEEN    1UL   // mapped RO, will get RW on next write
+#define UVM_DIRTY_PAGE_DIRTY   2UL   // written, mapped RW
+
+// Called from UVM_DIRTY_TRACKING_BEGIN ioctl
+// Enables tracking and invalidates (unmaps) all current GPU mappings
+NV_STATUS uvm_dirty_tracking_invalidate_all_gpu(uvm_va_space_t *va_space);
+
+// Called per-page during write fault servicing.
+// Returns true  → page was already SEEN, allow write, mark dirty
+// Returns false → first time, downgrade to RO, record as SEEN
+bool uvm_dirty_track_handle_write_fault(uvm_va_space_t *va_space, NvU64 fault_addr);
+void uvm_dirty_track_handle_read_fault(uvm_va_space_t *va_space, NvU64 fault_addr);
+
+// Init/teardown (call from va_space create/destroy)
+void uvm_dirty_track_init(uvm_dirty_track_state_t *state);
+void uvm_dirty_track_destroy(uvm_dirty_track_state_t *state);
+
+
+#endif

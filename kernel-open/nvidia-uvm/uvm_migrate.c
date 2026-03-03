@@ -877,6 +877,8 @@ void uvm_migrate_exit(void)
 
 NV_STATUS uvm_api_migrate(UVM_MIGRATE_PARAMS *params, struct file *filp)
 {
+	printk(KERN_INFO "uvm_api_migrate\n");
+
     uvm_va_space_t *va_space = uvm_va_space_get(filp);
     uvm_tracker_t tracker = UVM_TRACKER_INIT();
     uvm_tracker_t *tracker_ptr = NULL;

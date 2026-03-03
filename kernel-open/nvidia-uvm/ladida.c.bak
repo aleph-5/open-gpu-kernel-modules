@@ -1,0 +1,208 @@
+/* #include "uvm_dirty_track.h" */
+/* #include "uvm_va_space.h" */
+/* #include "uvm_va_range.h" */
+/* #include "uvm_va_block.h" */
+/* #include "uvm_lock.h" */
+/* #include "uvm_processors.h" */
+/* #include "uvm_tracker.h" */
+
+/* NV_STATUS uvm_dirty_tracking_invalidate_all_gpu(uvm_va_space_t *va_space) */
+/* { */
+/*     va_space->dirty_tracking_active = NV_TRUE; */
+/*     printk(KERN_INFO "dirty_track: tracking enabled for va_space=%p\n", va_space); */
+/*     return NV_OK; */
+/* } */
+
+/* bool uvm_dirty_track_write_fault(uvm_va_space_t *va_space, NvU64 addr) { */
+/*     uvm_dirty_track_state_t *state = &va_space->dirty_track; */
+/*     unsigned long index = addr >> PAGE_SHIFT; */
+/*     unsigned long old; */
+
+/*     spin_lock(&state->lock); */
+/*     old = xa_to_value(xa_load(&state->page_states, index)); */
+/*     if (old >= UVM_DIRTY_PAGE_SEEN) { */
+/*         // Already seen → allow write, mark dirty */
+/*         xa_store(&state->page_states, index, */
+/*                  xa_mk_value(UVM_DIRTY_PAGE_DIRTY), GFP_ATOMIC); */
+/*         spin_unlock(&state->lock); */
+/*         return true;  // caller: service as WRITE */
+/*     } else { */
+/*         // First time → record as seen, downgrade to RO */
+/*         xa_store(&state->page_states, index, */
+/*                  xa_mk_value(UVM_DIRTY_PAGE_SEEN), GFP_ATOMIC); */
+/*         spin_unlock(&state->lock); */
+/*         return false; // caller: service as READ */
+/*     } */
+/* } */
+#include "uvm_dirty_track.h"
+#include "uvm_va_space.h"
+#include "uvm_va_range.h"
+#include "uvm_va_block.h"
+#include "uvm_gpu.h"
+#include "uvm_lock.h"
+#include "uvm_processors.h"
+#include "uvm_tracker.h"
+#include <linux/xarray.h>
+
+/* ---- Init / destroy ------------------------------------------------- */
+
+void uvm_dirty_track_init(uvm_dirty_track_state_t *state)
+{
+    xa_init(&state->page_states);
+}
+
+void uvm_dirty_track_destroy(uvm_dirty_track_state_t *state)
+{
+    xa_destroy(&state->page_states);
+}
+
+/* ---- Per-fault entry points ----------------------------------------- */
+
+bool uvm_dirty_track_handle_write_fault(uvm_va_space_t *va_space, NvU64 fault_addr)
+{
+    uvm_dirty_track_state_t *state = &va_space->dirty_track;
+    unsigned long index = (unsigned long)(fault_addr >> PAGE_SHIFT);
+    unsigned long old_val;
+    unsigned long flags;
+
+    xa_lock_irqsave(&state->page_states, flags);
+
+    old_val = xa_to_value(xa_load(&state->page_states, index));
+
+    if (old_val >= UVM_DIRTY_PAGE_SEEN) {
+        /* Already mapped RO (SEEN). Allow write, mark DIRTY. */
+        printk(KERN_INFO "[DIRTY-TRACK] VA=0x%llx  SEEN->DIRTY: allowing write\n",
+           fault_addr);
+        __xa_store(&state->page_states, index,
+                   xa_mk_value(UVM_DIRTY_PAGE_DIRTY), GFP_ATOMIC);
+        xa_unlock_irqrestore(&state->page_states, flags);
+        return true;  /* caller: service as WRITE */
+    }
+
+    printk(KERN_INFO "[DIRTY-TRACK] VA=0x%llx  NEW->SEEN:   downgrading write to READ\n",
+           fault_addr);
+    
+    /* First write to this page. Downgrade to READ, mark SEEN. */
+    __xa_store(&state->page_states, index,
+               xa_mk_value(UVM_DIRTY_PAGE_SEEN), GFP_ATOMIC);
+    xa_unlock_irqrestore(&state->page_states, flags);
+    return false;  /* caller: service as READ */
+}
+
+void uvm_dirty_track_handle_read_fault(uvm_va_space_t *va_space, NvU64 fault_addr)
+{
+    uvm_dirty_track_state_t *state = &va_space->dirty_track;
+    unsigned long index = (unsigned long)(fault_addr >> PAGE_SHIFT);
+    unsigned long flags;
+
+    xa_lock_irqsave(&state->page_states, flags);
+
+    /* Mark SEEN only if never seen before; never overwrite DIRTY. */
+    if (!xa_load(&state->page_states, index)) {
+        printk(KERN_INFO "[DIRTY-TRACK] VA=0x%llx  NEW->SEEN:   read fault, marking seen\n",
+           fault_addr);
+        __xa_store(&state->page_states, index,
+                   xa_mk_value(UVM_DIRTY_PAGE_SEEN), GFP_ATOMIC);
+    }
+
+    xa_unlock_irqrestore(&state->page_states, flags);
+}
+
+/* ---- Block-level write revocation ----------------------------------- */
+
+static NV_STATUS _revoke_write_in_block(uvm_va_block_t *va_block,
+                                        uvm_va_space_t *va_space)
+{
+    uvm_va_block_context_t *block_context;
+    uvm_gpu_t *gpu;
+    NV_STATUS first_err = NV_OK;
+    NV_STATUS status;
+    uvm_va_block_region_t region;
+
+    block_context = uvm_va_block_context_alloc(NULL);
+    if (!block_context)
+        return NV_ERR_NO_MEMORY;
+
+    region = uvm_va_block_region_from_block(va_block);
+    uvm_mutex_lock(&va_block->lock);
+
+    for_each_va_space_gpu(gpu, va_space) {
+        uvm_processor_id_t gpu_id = gpu->id;
+
+        if (!uvm_processor_mask_test(&va_block->mapped, gpu_id))
+            continue;
+
+        /*
+         * Revoke WRITE and ATOMIC permissions, leaving READ mappings intact.
+         *
+         * uvm_va_block_revoke_prot(va_block, block_context, id,
+         *                          page_mask (NULL = all),
+         *                          region, prot_to_revoke, out_tracker)
+         */
+        status = uvm_va_block_revoke_prot(va_block, block_context, gpu_id,
+                                          region, NULL,
+                                          UVM_PROT_READ_WRITE,
+                                          &va_block->tracker);
+        printk(KERN_INFO "[DIRTY-TRACK] REVOKE: block=[0x%llx, 0x%llx] gpu=%u write perms removed\n",
+       va_block->start, va_block->end, uvm_id_value(gpu_id));
+
+        if (status != NV_OK && first_err == NV_OK)
+            first_err = status;
+    }
+
+    uvm_mutex_unlock(&va_block->lock);
+    uvm_va_block_context_free(block_context);
+    return first_err;
+}
+
+/* ---- BEGIN ioctl handler -------------------------------------------- */
+
+NV_STATUS uvm_dirty_tracking_invalidate_all_gpu(uvm_va_space_t *va_space)
+{
+    uvm_va_range_t *va_range;
+    uvm_va_block_t *va_block;
+    NV_STATUS first_err = NV_OK;
+    NV_STATUS status;
+
+    /*
+     * Step 1: activate tracking and reset page state under write lock.
+     *
+     * xa_destroy + xa_init is a cheap full clear. Fine here because this
+     * is a one-time ioctl, not a hot-path operation.
+     */
+    uvm_va_space_down_write(va_space);
+    xa_destroy(&va_space->dirty_track.page_states);
+    xa_init(&va_space->dirty_track.page_states);
+    va_space->dirty_tracking_active = NV_TRUE;
+    uvm_va_space_up_write(va_space);
+
+    /*
+     * Step 2: revoke write permissions on all mapped blocks.
+     *
+     * Read lock is enough to keep the range tree stable.
+     * _revoke_write_in_block acquires va_block->lock (mutex) internally;
+     * it MUST NOT be called with the va_space write lock held.
+     */
+    uvm_va_space_down_read(va_space);
+
+    uvm_for_each_va_range(va_range, va_space) {
+        if (va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
+            continue;  /* HMM ranges: kernel manages their mappings */
+
+        for_each_va_block_in_va_range(uvm_va_range_to_managed(va_range), va_block) {
+            status = _revoke_write_in_block(va_block, va_space);
+            if (status != NV_OK && first_err == NV_OK)
+                first_err = status;
+        }
+    }
+
+    uvm_va_space_up_read(va_space);
+
+    if (first_err != NV_OK)
+        printk(KERN_WARNING "UVM dirty-track: errors during revocation "
+               "(first=%d). Some pages may not re-fault.\n", first_err);
+    else
+        printk(KERN_INFO "UVM dirty-track: ACTIVE. GPU write perms revoked.\n");
+
+    return first_err;
+}

@@ -15,6 +15,7 @@ NVIDIA_UVM_OBJECTS += $(patsubst %.c,%.o,$(NVIDIA_UVM_SOURCES))
 
 obj-m += nvidia-uvm.o
 nvidia-uvm-y := $(NVIDIA_UVM_OBJECTS)
+# nvidia-uvm-y += nvidia-uvm/uvm_dirty_track.o # Add custom file
 
 NVIDIA_UVM_KO = nvidia-uvm/nvidia-uvm.ko
 

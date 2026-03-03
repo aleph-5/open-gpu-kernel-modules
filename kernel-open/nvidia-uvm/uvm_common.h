@@ -42,6 +42,30 @@
 #include "uvm_types.h"
 #include "uvm_linux.h"
 
+// EDIT BY ADITI KHANDELIA
+
+extern int uvm_dirty_tracking;
+
+struct dirty_page_info {
+    unsigned long page_number;
+    unsigned long timestamp;
+    unsigned long instruction_address;
+};
+
+struct uvm_dirty_page_table {
+    struct xarray pages;
+};
+
+void uvm_dirty_page_table_init(void);
+
+void uvm_dirty_page_table_destroy(void);
+
+NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp, unsigned long instruction_address);
+
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number);
+
+// END OF EDIT
+
 enum {
     NVIDIA_UVM_PRIMARY_MINOR_NUMBER = 0,
     NVIDIA_UVM_TOOLS_MINOR_NUMBER   = 1,

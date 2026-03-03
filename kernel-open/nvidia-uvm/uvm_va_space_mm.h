@@ -205,6 +205,8 @@ static void uvm_mmput(struct mm_struct *mm)
 
 static void uvm_mmgrab(struct mm_struct *mm)
 {
+    // pins a struct mm_struct
+    // ensures that the mm will not be cleaned up even when the owning process exits
     mmgrab(mm);
 }
 

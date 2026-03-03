@@ -24,6 +24,7 @@
 #include "linux/sort.h"
 #include "nv_uvm_interface.h"
 #include "uvm_common.h"
+// #include "uvm_dirty_track.h"
 #include "uvm_linux.h"
 #include "uvm_global.h"
 #include "uvm_gpu_replayable_faults.h"
@@ -39,6 +40,16 @@
 #include "uvm_gpu_non_replayable_faults.h"
 #include "uvm_ats_faults.h"
 #include "uvm_test.h"
+
+// ARUSH: More verbose prints
+static const char *fault_access_type_str[] = {
+    "PREFETCH",
+    "READ",
+    "WRITE",
+    "ATOMIC_WEAK",
+    "ATOMIC_STRONG"
+};
+
 
 // The documentation at the beginning of uvm_gpu_non_replayable_faults.c
 // provides some background for understanding replayable faults, non-replayable
@@ -1310,6 +1321,13 @@ static uvm_fault_access_type_t check_fault_access_permissions(uvm_gpu_t *gpu,
                                                                                      fault_entry->fault_address),
                                                          fault_entry->fault_access_type,
                                                          allow_migration);
+
+    printk(KERN_ERR "[FAULT-TRACE-3] check_fault_access_permissions: VA=0x%llx "
+           "access_type=%d perm_status=%d\n",
+           fault_entry->fault_address,
+           fault_entry->fault_access_type,
+           perm_status);
+
     if (perm_status == NV_OK)
         return fault_entry->fault_access_type;
 
@@ -1353,6 +1371,14 @@ static uvm_fault_access_type_t check_fault_access_permissions(uvm_gpu_t *gpu,
     else {
         cancel_va_mode = UVM_FAULT_CANCEL_VA_MODE_ALL;
     }
+
+    printk(KERN_ERR "UVM: GPU fault permission violation at VA 0x%llx | "
+           "access_type=%d cancel_mode=%s fatal_reason=%d\n",
+           fault_entry->fault_address,
+           fault_entry->fault_access_type,
+           (cancel_va_mode == UVM_FAULT_CANCEL_VA_MODE_ALL) ?
+               "ALL" : "WRITE_AND_ATOMIC",
+           fatal_reason);
 
     mark_fault_fatal(batch_context, fault_entry, fatal_reason, cancel_va_mode);
 
@@ -1398,6 +1424,12 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
     BUILD_BUG_ON(UVM_FAULT_ACCESS_TYPE_COUNT > (int)(NvU8)-1);
 
     uvm_assert_mutex_locked(&va_block->lock);
+
+    printk(KERN_ERR "[FAULT-TRACE-2] service_fault_batch_block_locked: "
+           "block=[0x%llx, 0x%llx] first_fault VA=0x%llx access_type=%d\n",
+           va_block->start, va_block->end,
+           first_fault_entry->fault_address,
+           first_fault_entry->fault_access_type);
 
     *block_faults = 0;
 
@@ -1571,6 +1603,27 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
 
         ++page_fault_count;
 
+        printk(KERN_ERR "[FAULT-TRACE-3.5] page_fault_count=%u VA=0x%llx "
+               "page_index=%u access_type=%d block=[0x%llx, 0x%llx]\n",
+               page_fault_count,
+               current_entry->fault_address,
+               page_index,
+               service_access_type,
+               va_block->start, va_block->end);
+
+		NvU64 fault_addr = va_block->start + ((NvU64)page_index << PAGE_SHIFT);
+
+        printk(KERN_ERR "[FAULT-TRACE-VA] page_index=%u VA=0x%llx\n",
+           page_index,
+           fault_addr);
+
+        // EDIT BY ADITI KHANDELIA
+        if (uvm_dirty_tracking && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
+            unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
+            uvm_dirty_page_table_record(page_number, ktime_get_ns(), 0);
+        }
+        // EDIT OF EDIT
+
         block_context->access_type[page_index] = service_access_type;
 
         if (page_index < first_page_index)
@@ -1584,6 +1637,10 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
     if (page_fault_count > 0) {
         block_context->region = uvm_va_block_region(first_page_index, last_page_index + 1);
         status = uvm_va_block_service_locked(gpu->id, va_block, va_block_retry, block_context);
+
+        printk(KERN_ERR "[FAULT-TRACE-4] uvm_va_block_service_locked: "
+               "page_fault_count=%u status=%d\n",
+               page_fault_count, status);
     }
 
     *block_faults = i - first_fault_index;
@@ -1978,6 +2035,12 @@ static NV_STATUS service_fault_batch_dispatch(uvm_va_space_t *va_space,
         status = uvm_hmm_va_block_find_create(va_space, fault_address, &va_block_context->hmm.vma, &va_block);
     else
         status = NV_ERR_INVALID_ADDRESS;
+
+    if (status == NV_ERR_INVALID_ADDRESS) {
+        printk(KERN_ERR "UVM: GPU fault on unmapped address 0x%llx | "
+               "access_type=%d (no VA range or HMM block found)\n",
+               fault_address, current_entry->fault_access_type);
+    }
 
     if (status == NV_OK) {
         status = service_fault_batch_block(gpu, va_block, batch_context, fault_index, hmm_migratable, block_faults);
@@ -2914,6 +2977,8 @@ void uvm_parent_gpu_service_replayable_faults(uvm_parent_gpu_t *parent_gpu)
 
     UVM_ASSERT(parent_gpu->replayable_faults_supported);
 
+    printk(KERN_ERR "[FAULT-TRACE-1] uvm_parent_gpu_service_replayable_faults: ENTER\n");
+
     uvm_tracker_init(&batch_context->tracker);
 
     // Process all faults in the buffer
@@ -3116,3 +3181,4 @@ NV_STATUS uvm_test_drain_replayable_faults(UVM_TEST_DRAIN_REPLAYABLE_FAULTS_PARA
 
     return status;
 }
+

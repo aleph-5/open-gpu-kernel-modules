@@ -3,3 +3,7 @@
 *.o.cmd
 *.o.d
 _out/
+
+cscope.*
+tags
+compile.sh

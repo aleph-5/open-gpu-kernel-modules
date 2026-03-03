@@ -979,6 +979,38 @@ static void uvm_migrate_vma_state_deinit_sgt(migrate_vma_state_t *state)
 
 static void uvm_migrate_vma_alloc_and_copy(struct migrate_vma *args, migrate_vma_state_t *state)
 {
+	/* printk(KERN_INFO "=== migrate_vma_alloc_and_copy START ===\n"); */
+    /* printk(KERN_INFO "  migrate_vma args:\n"); */
+    /* printk(KERN_INFO "    vma:     %p\n", args->vma); */
+    /* printk(KERN_INFO "    dst:     %p\n", args->dst); */
+    /* printk(KERN_INFO "    src:     %p\n", args->src); */
+    /* printk(KERN_INFO "    start:   0x%lx\n", args->start); */
+    /* printk(KERN_INFO "    end:     0x%lx (range: 0x%lx)\n", args->end, args->end - args->start); */
+
+    /* printk(KERN_INFO "  state->uvm_migrate_args: %p\n", state->uvm_migrate_args); */
+    /* printk(KERN_INFO "  state->status:           0x%x\n", state->status); */
+    /* printk(KERN_INFO "  state->num_pages:        %lu\n", state->num_pages); */
+    /* printk(KERN_INFO "  state->num_populate_anon_pages: %lu\n", state->num_populate_anon_pages); */
+
+    /* printk(KERN_INFO "  Mask summaries:\n"); */
+    /* printk(KERN_INFO "    populate_pages_mask:    %p\n", &state->populate_pages_mask); */
+    /* printk(KERN_INFO "    allocation_failed_mask: %p\n", &state->allocation_failed_mask); */
+    /* printk(KERN_INFO "    dst_resident_pages_mask:%p\n", &state->dst_resident_pages_mask); */
+    /* printk(KERN_INFO "    scratch1_mask:          %p\n", &state->scratch1_mask); */
+    /* printk(KERN_INFO "    scratch2_mask:          %p\n", &state->scratch2_mask); */
+
+    /* printk(KERN_INFO "  Processor residency (pre-migrate):\n"); */
+    /* printk(KERN_INFO "    src_gpus:               %p\n", &state->src_gpus); */
+    /* printk(KERN_INFO "    src_cpu_nodemask:       %p\n", &state->src_cpu_nodemask); */
+    /* printk(KERN_INFO "    cpu_page_mask:          %p\n", state->cpu_page_mask); */
+
+    /* printk(KERN_INFO "  Arrays:\n"); */
+    /* printk(KERN_INFO "    dst_pfn_array:          %p (size: %lu)\n", */
+           /* state->dst_pfn_array, UVM_MIGRATE_VMA_MAX_PAGES); */
+    /* printk(KERN_INFO "    src_pfn_array:          %p (size: %lu)\n", */
+           /* state->src_pfn_array, UVM_MIGRATE_VMA_MAX_PAGES); */
+
+    /* printk(KERN_INFO "=== migrate_vma_alloc_and_copy END ===\n"); */
     struct vm_area_struct *vma = args->vma;
     unsigned long start = args->start;
     unsigned long outer = args->end;
@@ -1463,8 +1495,41 @@ static NV_STATUS migrate_pageable(migrate_vma_state_t *state)
     return NV_ERR_INVALID_ADDRESS;
 }
 
+static void print_uvm_migrate_args(uvm_migrate_args_t *args)
+{
+    printk(KERN_INFO "=== UVM Migrate Args ===\n");
+    printk(KERN_INFO "  va_space:            %p\n", args->va_space);
+    printk(KERN_INFO "  mm:                  %p\n", args->mm);
+    printk(KERN_INFO "  start:               0x%lx\n", args->start);
+    printk(KERN_INFO "  length:              0x%lx\n", args->length);
+    printk(KERN_INFO "  dst_id:              %u\n", args->dst_id);
+    printk(KERN_INFO "  dst_node_id:         %d\n", args->dst_node_id);
+    printk(KERN_INFO "  populate_permissions:0x%x\n", args->populate_permissions);
+    printk(KERN_INFO "  populate_flags:      0x%x\n", args->populate_flags);
+    printk(KERN_INFO "  skip_mapped:         %s\n", args->skip_mapped ? "true" : "false");
+
+    printk(KERN_INFO "  cause:               %u (%s)\n",
+           args->cause,
+           args->cause == UVM_MAKE_RESIDENT_CAUSE_ACCESS_COUNTER ? "ACCESS_COUNTER" : "UNKNOWN");
+
+    printk(KERN_INFO "  populate_on_cpu_alloc_failures:    %s\n",
+           args->populate_on_cpu_alloc_failures ? "true" : "false");
+    printk(KERN_INFO "  populate_on_migrate_vma_failures:  %s\n",
+           args->populate_on_migrate_vma_failures ? "true" : "false");
+    printk(KERN_INFO "  access_counters_buffer_index:     %u\n",
+           args->access_counters_buffer_index);
+    printk(KERN_INFO "  user_space_start:                 %p\n", args->user_space_start);
+    printk(KERN_INFO "  user_space_length:                %p\n", args->user_space_length);
+    printk(KERN_INFO "  gpus_to_check_for_nvlink_errors:  %p\n", args->gpus_to_check_for_nvlink_errors);
+    printk(KERN_INFO "  fail_on_unresolved_sto_errors:    %s\n",
+           args->fail_on_unresolved_sto_errors ? "true" : "false");
+    printk(KERN_INFO "============================\n");
+}
+
+
 NV_STATUS uvm_migrate_pageable(uvm_migrate_args_t *uvm_migrate_args)
 {
+	/* print_uvm_migrate_args(uvm_migrate_args); */
     migrate_vma_state_t *state = NULL;
     NV_STATUS status;
     uvm_processor_id_t dst_id = uvm_migrate_args->dst_id;

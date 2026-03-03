@@ -45,6 +45,11 @@
 #include "uvm_ats.h"
 #include "uvm_va_space_mm.h"
 #include "uvm_conf_computing.h"
+#include <linux/xarray.h>
+
+typedef struct {
+    struct xarray    page_states;    // addr >> PAGE_SHIFT → state
+} uvm_dirty_track_state_t;
 
 // uvm_deferred_free_object provides a mechanism for building and later freeing
 // a list of objects which are owned by a VA space, but can't be freed while the
@@ -434,6 +439,10 @@ struct uvm_va_space_struct
 
     // Queue item for deferred f_ops->release() handling
     nv_kthread_q_item_t deferred_release_q_item;
+
+    NvBool dirty_tracking_active;
+	uvm_dirty_track_state_t   dirty_track;       // ARUSH
+
 };
 
 NV_STATUS uvm_va_space_create(struct address_space *mapping, uvm_va_space_t **va_space_ptr, NvU64 flags);

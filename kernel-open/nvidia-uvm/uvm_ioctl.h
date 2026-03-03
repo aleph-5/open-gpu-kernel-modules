@@ -1150,6 +1150,12 @@ typedef struct
     NV_STATUS rmStatus;     // OUT
 } UVM_IS_8_SUPPORTED_PARAMS;
 
+// #define UVM_DIRTY_TRACKING_BEGIN                                    UVM_IOCTL_BASE(2048)
+
+// typedef struct {
+//     NV_STATUS rmStatus;
+// } UVM_DIRTY_TRACKING_BEGIN_PARAMS;
+
 #ifdef __cplusplus
 }
 #endif

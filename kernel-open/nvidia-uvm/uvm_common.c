@@ -21,6 +21,109 @@
 #include "uvm_linux.h"
 #include "uvm_forward_decl.h"
 
+
+// EDIT BY ADITI KHANDELIA
+int uvm_dirty_tracking = 0;
+static int uvm_dirty_tracking_set(const char *val, 
+    const struct kernel_param *kp)
+{
+    int ret = param_set_int(val, kp);
+    if (ret)
+        return ret;
+    if (uvm_dirty_tracking)
+        uvm_dirty_page_table_init();
+    else
+        uvm_dirty_page_table_destroy();
+    return 0;
+}
+
+static const struct kernel_param_ops uvm_dirty_tracking_ops = {
+    .set = uvm_dirty_tracking_set,
+    .get = param_get_int,
+};
+module_param_cb(uvm_dirty_tracking, &uvm_dirty_tracking_ops, &uvm_dirty_tracking, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(uvm_dirty_tracking, "Enable tracking of dirty pages in UVM (default: 0)");
+int uvm_dirty_counter = 0;
+// END OF EDIT 
+
+// EDIT BY ADITI KHANDELIA
+struct uvm_dirty_page_table* page_table_pointer = NULL;
+
+void uvm_dirty_page_table_init() {
+    if (page_table_pointer != NULL) {
+        uvm_dirty_page_table_destroy();
+        printk(KERN_WARNING "Dirty page table was already initialized, reinitializing it\n");
+    }
+    page_table_pointer = kmalloc(sizeof(struct uvm_dirty_page_table), GFP_KERNEL);
+    if (page_table_pointer == NULL) {
+        printk(KERN_ERR "Failed to allocate memory for dirty page table\n");
+        return;
+    }
+    xa_init(&page_table_pointer->pages);
+    printk(KERN_INFO "Dirty page table initialized\n");
+}
+
+void uvm_dirty_page_table_destroy() {
+    if (page_table_pointer == NULL) {
+        printk(KERN_ERR "Dirty page table not initialized\n");
+        return;
+    }
+    unsigned long index;
+    struct dirty_page_info *info;
+    xa_for_each(&page_table_pointer->pages, index, info) {
+        kfree(info);
+    }
+    xa_destroy(&page_table_pointer->pages);
+    kfree(page_table_pointer);
+    page_table_pointer = NULL;
+    printk(KERN_INFO "Dirty page table destroyed\n");
+}
+
+NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
+    unsigned long timestamp,
+    unsigned long instruction_address) {
+    
+    struct dirty_page_info *info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
+    if (info == NULL) {
+        printk(KERN_ERR "Failed to allocate memory for dirty page info\n");
+        return NV_ERR_NO_MEMORY;
+    }
+    info->page_number = page_number;
+    info->timestamp = timestamp;
+    info->instruction_address = instruction_address;
+    if (page_table_pointer == NULL) {
+        printk(KERN_ERR "Dirty page table not initialized\n");
+        kfree(info);
+        return NV_ERR_NO_MEMORY;
+    }
+    void* ret = xa_store(&page_table_pointer->pages, page_number, info, GFP_ATOMIC);
+    if (xa_err(ret)) {
+        printk(KERN_ERR "Failed to store dirty page info in xarray\n");
+        kfree(info);
+        return NV_ERR_NO_MEMORY;
+    }
+    uvm_dirty_counter++;
+    printk(KERN_INFO "Recorded dirty page: page_number=%lu, timestamp=%lu, instruction_address=%lu\n",
+           page_number, timestamp, instruction_address);
+    return NV_OK;
+}
+
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number) {
+    if (page_table_pointer == NULL) {
+        printk(KERN_ERR "Dirty page table not initialized\n");
+        return NULL;
+    }
+    struct dirty_page_info *info = xa_load(&page_table_pointer->pages, page_number);
+    if (info == NULL) {
+        printk(KERN_INFO "No dirty page info found for page_number=%lu\n", page_number);
+        return NULL;    
+    }
+    printk(KERN_INFO "Found dirty page info: page_number=%lu, timestamp=%lu, instruction_address=%lu\n",
+           info->page_number, info->timestamp, info->instruction_address);
+    return info;
+}
+// END OF EDIT
+
 // TODO: Bug 1710855: Tweak this number through benchmarks
 #define UVM_SPIN_LOOP_SCHEDULE_TIMEOUT_NS   (10*1000ULL)
 #define UVM_SPIN_LOOP_PRINT_TIMEOUT_SEC     30ULL

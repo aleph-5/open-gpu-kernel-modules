@@ -179,8 +179,12 @@ bool uvm_va_space_mm_enabled(uvm_va_space_t *va_space)
     return uvm_va_space_mm_enabled_system();
 }
 
+
+// ADITI : uvm_va_space_t is per UVM VA space instance
+// ADITI : Registers the mm with a va space
 NV_STATUS uvm_va_space_mm_register(uvm_va_space_t *va_space)
 {
+    printk(KERN_INFO "NVIDIA UVM DRIVER : The name of the process is %s\n", current->comm);
     uvm_va_space_mm_t *va_space_mm = &va_space->va_space_mm;
 
     uvm_assert_mmap_lock_locked_write(current->mm);
@@ -218,6 +222,7 @@ NV_STATUS uvm_va_space_mm_register(uvm_va_space_t *va_space)
     return NV_OK;
 }
 
+// ADITI : unregister the mm with the va space
 void uvm_va_space_mm_unregister(uvm_va_space_t *va_space)
 {
     uvm_va_space_mm_t *va_space_mm = &va_space->va_space_mm;
@@ -239,6 +244,8 @@ void uvm_va_space_mm_unregister(uvm_va_space_t *va_space)
         uvm_mmdrop(va_space_mm->mm);
 }
 
+// ADITI : manage safe temporary users of mm
+// increase the reference count and return va_space_mm -> mm
 struct mm_struct *uvm_va_space_mm_retain(uvm_va_space_t *va_space)
 {
     uvm_va_space_mm_t *va_space_mm = &va_space->va_space_mm;
@@ -291,6 +298,7 @@ struct mm_struct *uvm_va_space_mm_or_current_retain(uvm_va_space_t *va_space)
     return uvm_va_space_mm_retain(va_space);
 }
 
+// ADITI : reduce the reference count of va_space_mm
 void uvm_va_space_mm_release(uvm_va_space_t *va_space)
 {
     uvm_va_space_mm_t *va_space_mm = &va_space->va_space_mm;
