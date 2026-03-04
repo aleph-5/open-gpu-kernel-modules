@@ -24,6 +24,7 @@
 #include "uvm_global.h"
 #include "uvm_procfs.h"
 #include "uvm_gpu.h"
+#include "uvm_common.h"
 
 #include "nv-procfs.h"
 #include "uvm_linux.h"
@@ -48,6 +49,8 @@ static struct proc_dir_entry *uvm_proc_cpu;
 
 NV_STATUS uvm_procfs_init(void)
 {
+    NV_STATUS status;
+
     if (!uvm_procfs_is_enabled())
         return NV_OK;
 
@@ -62,6 +65,12 @@ NV_STATUS uvm_procfs_init(void)
     uvm_proc_cpu = NV_CREATE_PROC_DIR(UVM_PROC_CPU_DIR_NAME, uvm_proc_dir);
     if (uvm_proc_cpu == NULL)
         return NV_ERR_OPERATING_SYSTEM;
+
+    // EDIT BY ARUSH
+    status = uvm_dirty_procfs_init(uvm_proc_dir);
+    if (status != NV_OK)
+        return status;
+    // END OF EDIT
 
     return NV_OK;
 }

@@ -21,6 +21,13 @@
 #include "uvm_linux.h"
 #include "uvm_forward_decl.h"
 
+// EDIT BY ARUSH
+#if defined(CONFIG_PROC_FS)
+#include "uvm_procfs.h"
+#include "nv-procfs.h"
+#endif
+// END OF EDIT
+
 
 // EDIT BY ADITI KHANDELIA
 int uvm_dirty_tracking = 0;
@@ -122,6 +129,53 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number) {
            info->page_number, info->timestamp, info->instruction_address);
     return info;
 }
+// EDIT BY ARUSH - procfs query interface
+#if defined(CONFIG_PROC_FS)
+
+/*
+ * seq_file show callback. single_open() calls this exactly once per open()
+ * with __v = SEQ_START_TOKEN; the parameter is unused in the single-page case.
+ */
+static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
+{
+    unsigned long index;
+    struct dirty_page_info *info;
+
+    if (page_table_pointer == NULL) {
+        seq_printf(s, "# dirty tracking not active\n");
+        return 0;
+    }
+
+    seq_printf(s, "# page_address_hex timestamp_ns\n");
+    xa_for_each(&page_table_pointer->pages, index, info) {
+        seq_printf(s, "0x%lx %lu\n",
+                   index << PAGE_SHIFT,
+                   info->timestamp);
+    }
+    return 0;
+}
+
+static int nv_procfs_read_dirty_pages_entry(struct seq_file *s, void *v)
+{
+    return nv_procfs_read_dirty_pages(s, v);
+}
+
+UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_pages_entry);
+
+NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
+{
+    struct proc_dir_entry *entry;
+
+    entry = NV_CREATE_PROC_FILE("dirty_pages", parent, dirty_pages_entry, NULL);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+
+    return NV_OK;
+}
+
+#endif // CONFIG_PROC_FS
+// END OF EDIT - procfs query interface
+
 // END OF EDIT
 
 // TODO: Bug 1710855: Tweak this number through benchmarks

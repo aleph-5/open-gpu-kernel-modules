@@ -66,6 +66,13 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number);
 
 // END OF EDIT
 
+#if defined(CONFIG_PROC_FS) 
+struct proc_dir_entry;
+NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent);
+#endif
+
+
+
 enum {
     NVIDIA_UVM_PRIMARY_MINOR_NUMBER = 0,
     NVIDIA_UVM_TOOLS_MINOR_NUMBER   = 1,
