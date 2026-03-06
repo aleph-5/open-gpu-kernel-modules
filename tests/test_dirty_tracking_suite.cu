@@ -2,10 +2,15 @@
  * GROUP A: basic tracking  |  GROUP B: pid logging + addr range filter
  *
  * Kernel interface:
- *   /sys/module/nvidia_uvm/parameters/uvm_dirty_tracking  — write "1" to
- *       enable (and reinitialize/clear table); write "0" to disable+destroy
+ *   /proc/driver/nvidia-uvm/dirty_pids_start_track — write anything to start
+ *       tracking for the current process (inits/reinits table + invalidates
+ *       all GPU PTEs so subsequent faults are recorded fresh)
+ *   /proc/driver/nvidia-uvm/dirty_pids_stop_track  — write anything to stop
+ *       tracking for the current process (destroys table)
+ *   /proc/driver/nvidia-uvm/dirty_pid_to_query     — write a pid to select
+ *       which process's dirty pages are returned on the next dirty_pages read
  *   /proc/driver/nvidia-uvm/dirty_pages  — read dirty entries:
- *       "# dirty tracking not active"  when disabled
+ *       "# dirty tracking not active for pid <N>"  when disabled
  *       "0x<addr_hex> <timestamp_ns> <pid>"  one line per dirty page
  *   /proc/driver/nvidia-uvm/dirty_range — write "<start_hex> <end_hex>" to
  *       restrict which pages are returned on the next read; defaults to
@@ -23,7 +28,9 @@
 #include <sys/stat.h>
 #include <cuda_runtime.h>
 
-#define SYSFS_DIRTY        "/sys/module/nvidia_uvm/parameters/uvm_dirty_tracking"
+#define PROCFS_DIRTY_START "/proc/driver/nvidia-uvm/dirty_pids_start_track"
+#define PROCFS_DIRTY_STOP  "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
+#define PROCFS_DIRTY_QUERY "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_DIRTY       "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_DIRTY_RANGE "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -110,8 +117,11 @@ static void sysfs_write(const char *path, const char *val)
 }
 
 static int  sysfs_exists(const char *p)    { struct stat st; return stat(p, &st) == 0; }
-static void set_tracking(int v)            { sysfs_write(SYSFS_DIRTY, v ? "1\n" : "0\n"); }
-static void reset_table(void)              { sysfs_write(SYSFS_DIRTY, "1\n"); }
+static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, "1\n"); }
+static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, "1\n"); }
+
+static void set_query_pid(pid_t pid)
+    { char b[32]; snprintf(b, sizeof(b), "%d\n", pid); sysfs_write(PROCFS_DIRTY_QUERY, b); }
 
 /* Reset addr range filter to the full address space (kernel default). */
 static void reset_addr_range(void)
@@ -450,12 +460,13 @@ int main(void)
 {
     int *managed = NULL, dev;
 
-    printf("=== UVM Dirty Tracking Test Suite ===\nPID = %d\n\n", getpid());
+    pid_t my_pid = getpid();
+    printf("=== UVM Dirty Tracking Test Suite ===\nPID = %d\n\n", my_pid);
 
     if (geteuid() != 0)
         { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
-    if (!sysfs_exists(SYSFS_DIRTY))
-        { fprintf(stderr, "ERROR: %s not found\n", SYSFS_DIRTY); return 1; }
+    if (!sysfs_exists(PROCFS_DIRTY_START))
+        { fprintf(stderr, "ERROR: %s not found\n", PROCFS_DIRTY_START); return 1; }
     if (!sysfs_exists(PROCFS_DIRTY))
         { fprintf(stderr, "ERROR: %s not found\n", PROCFS_DIRTY); return 1; }
 
@@ -465,6 +476,9 @@ int main(void)
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("  managed: 0x%lx - 0x%lx  (%d pages)\n\n",
            (unsigned long)managed, (unsigned long)managed + NUM_PAGES * PAGE_SIZE, NUM_PAGES);
+
+    /* Tell the kernel which pid to report when reading dirty_pages. */
+    set_query_pid(my_pid);
 
     printf("--- GROUP A ---\n");
     t01_writes_recorded          (managed, dev);

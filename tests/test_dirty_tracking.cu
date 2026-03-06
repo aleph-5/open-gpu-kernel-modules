@@ -20,7 +20,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define SYSFS_PARAM "/sys/module/nvidia_uvm/parameters/uvm_dirty_tracking"
+#define PROCFS_DIRTY_START "/proc/driver/nvidia-uvm/dirty_pids_start_track"
+#define PROCFS_DIRTY_STOP  "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 
 #define NUM_PAGES   1
 #define PAGE_SIZE   4096
@@ -56,20 +57,30 @@ __global__ void kernel_write(int *data, int n)
 
 /* ---------- Helpers ------------------------------------------------------ */
 
-static void set_dirty_tracking(int val)
+static void procfs_write(const char *path, const char *val)
 {
-    int fd = open(SYSFS_PARAM, O_WRONLY);
+    int fd = open(path, O_WRONLY);
     if (fd < 0) {
-        perror("open " SYSFS_PARAM " (need root?)");
+        perror(path);
         exit(1);
     }
-    const char *s = val ? "1\n" : "0\n";
-    if (write(fd, s, strlen(s)) < 0) {
-        perror("write sysfs");
+    if (write(fd, val, strlen(val)) < 0) {
+        perror("write procfs");
         exit(1);
     }
     close(fd);
-    printf("[test] uvm_dirty_tracking = %d\n", val);
+}
+
+static void start_tracking(void)
+{
+    procfs_write(PROCFS_DIRTY_START, "1\n");
+    printf("[test] dirty tracking started for pid %d\n", getpid());
+}
+
+static void stop_tracking(void)
+{
+    procfs_write(PROCFS_DIRTY_STOP, "1\n");
+    printf("[test] dirty tracking stopped for pid %d\n", getpid());
 }
 
 /* Force pages back to CPU so the GPU will fault fresh on the next access. */
@@ -106,7 +117,7 @@ int main(void)
 
     /* ------------------------------------------------------------------ */
     printf("\n[test] === enabling dirty tracking ===\n");
-    /* set_dirty_tracking(1); */ // USE PROCFS INSTEAD
+    start_tracking();
 
     /* ------------------------------------------------------------------ */
     printf("[test] --- READ PHASE ---\n");
@@ -134,7 +145,7 @@ int main(void)
 
     /* ------------------------------------------------------------------ */
     printf("[test] === disabling dirty tracking ===\n");
-    /* set_dirty_tracking(0); */ // USE PROCFS INSTEAD
+    stop_tracking();
 
     CUDA_CHECK(cudaFree(managed));
     CUDA_CHECK(cudaFree(sink));
