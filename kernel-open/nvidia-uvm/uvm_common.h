@@ -68,7 +68,11 @@ void uvm_dirty_page_table_destroy(void);
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp, unsigned long instruction_address, pid_t pid);
 
 struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number);
+// END OF EDIT
 
+// EDIT BY ARUSH
+// Function pointer registered by uvm_va_space.c at module init.  
+extern void (*uvm_dirty_invalidate_fn)(void);
 // END OF EDIT
 
 #if defined(CONFIG_PROC_FS) 

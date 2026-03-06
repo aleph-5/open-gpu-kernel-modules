@@ -33,6 +33,11 @@ static unsigned long dirty_query_start = 0UL;
 static unsigned long dirty_query_end = ~0UL;
 // END OF EDIT
 
+// EDIT BY ARUSH
+// Registered from uvm_va_space.c at module init; NULL until then.
+void (*uvm_dirty_invalidate_fn)(void) = NULL;
+// END OF EDIT
+
 // EDIT BY ADITI KHANDELIA
 int uvm_dirty_tracking = 0;
 static int uvm_dirty_tracking_set(const char *val, 
@@ -41,10 +46,16 @@ static int uvm_dirty_tracking_set(const char *val,
     int ret = param_set_int(val, kp);
     if (ret)
         return ret;
-    if (uvm_dirty_tracking)
+    if (uvm_dirty_tracking) {
+        // EDIT BY ARUSH
+        if (uvm_dirty_invalidate_fn)
+            uvm_dirty_invalidate_fn();
+        // END OF EDIT
         uvm_dirty_page_table_init();
+    }
     else
         uvm_dirty_page_table_destroy();
+        
     return 0;
 }
 

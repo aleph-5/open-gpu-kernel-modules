@@ -2748,3 +2748,63 @@ vm_fault_t uvm_va_space_cpu_fault_hmm(uvm_va_space_t *va_space, struct vm_fault 
 {
     return uvm_va_space_cpu_fault(va_space, vmf, true);
 }
+
+// EDIT BY ARUSH: invalidate all GPU PTEs on dirty-tracking table init/reinit so that
+// subsequent GPU accesses fault and are recorded in the fresh dirty table.
+static void uvm_dirty_invalidate_all_gpu_mappings(void)
+{
+    uvm_va_space_t *va_space;
+    uvm_va_range_t *va_range;
+    uvm_va_block_t *va_block;
+    uvm_va_block_context_t *block_ctx;
+
+    block_ctx = uvm_va_block_context_alloc(NULL);
+    if (!block_ctx) {
+        printk(KERN_ERR "uvm_dirty: failed to alloc block_ctx for GPU unmap\n");
+        return;
+    }
+
+    uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
+
+    list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
+        uvm_va_space_down_read(va_space);
+
+        uvm_for_each_va_range(va_range, va_space) {
+            uvm_va_range_managed_t *managed;
+            uvm_processor_mask_t gpu_mask;
+
+            if (va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
+                continue;
+
+            managed = uvm_va_range_to_managed(va_range);
+
+            for_each_va_block_in_va_range(managed, va_block) {
+                uvm_mutex_lock(&va_block->lock);
+
+                uvm_processor_mask_copy(&gpu_mask, &va_block->mapped);
+                uvm_processor_mask_clear(&gpu_mask, UVM_ID_CPU);
+
+                if (!uvm_processor_mask_empty(&gpu_mask)) {
+                    uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
+                    uvm_va_block_unmap_mask(va_block, block_ctx, &gpu_mask, region, NULL);
+                }
+
+                uvm_mutex_unlock(&va_block->lock);
+            }
+        }
+
+        uvm_va_space_up_read(va_space);
+    }
+
+    uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+
+    uvm_va_block_context_free(block_ctx);
+}
+
+// Register the invalidation callback into uvm_common.
+// Must be called once at module init.
+void uvm_va_space_dirty_init(void)
+{
+    uvm_dirty_invalidate_fn = uvm_dirty_invalidate_all_gpu_mappings;
+}
+// END OF EDIT

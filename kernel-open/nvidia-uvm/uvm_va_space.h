@@ -448,6 +448,11 @@ struct uvm_va_space_struct
 NV_STATUS uvm_va_space_create(struct address_space *mapping, uvm_va_space_t **va_space_ptr, NvU64 flags);
 void uvm_va_space_destroy(uvm_va_space_t *va_space);
 
+// EDIT BY ARUSH - Register the dirty-page GPU-unmap callback into uvm_common.
+// Must be called once during module init.
+void uvm_va_space_dirty_init(void);
+// END OF EDIT
+
 // All VA space locking should be done with these wrappers. They're macros so
 // lock assertions are attributed to line numbers correctly.
 
