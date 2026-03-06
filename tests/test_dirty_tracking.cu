@@ -26,7 +26,7 @@
 #define PAGE_SIZE   4096
 #define NUM_INTS    (NUM_PAGES * PAGE_SIZE / sizeof(int))
 
-#define CHECK(call)                                                     \
+#define CUDA_CHECK(call)                                                     \
     do {                                                                \
         cudaError_t _e = (call);                                        \
         if (_e != cudaSuccess) {                                        \
@@ -79,29 +79,30 @@ static void migrate_to_cpu(void *ptr, size_t bytes)
 	cpu_loc.type = cudaMemLocationTypeHost;  // For any CPU
 	cpu_loc.id = 0;  // Ignored for Host, but set to 0
 
-    CHECK(cudaMemPrefetchAsync(ptr, bytes, cpu_loc, 0));
-    CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaMemPrefetchAsync(ptr, bytes, cpu_loc, 0));
+    CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 /* ---------- Main --------------------------------------------------------- */
 
 int main(void)
 {
+	printf("[test] PID = %d\n", getpid());
     int  *managed = NULL;
     int  *sink    = NULL;
     int   dev;
 
-    CHECK(cudaGetDevice(&dev));
+    CUDA_CHECK(cudaGetDevice(&dev));
 
-    CHECK(cudaMallocManaged(&managed, NUM_PAGES * PAGE_SIZE));
-    CHECK(cudaMallocManaged(&sink,    sizeof(int)));
+    CUDA_CHECK(cudaMallocManaged(&managed, NUM_PAGES * PAGE_SIZE));
+    CUDA_CHECK(cudaMallocManaged(&sink,    sizeof(int)));
 
     /* CPU-side initialise so pages start resident on the CPU. */
     memset(managed, 0, NUM_PAGES * PAGE_SIZE);
     printf("[test] --- Allocated managed at 0x%lx ---\n", managed);
     printf("[test] --- Sink at 0x%lx ---\n", sink);
     *sink = 0;
-    CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaDeviceSynchronize());
 
     /* ------------------------------------------------------------------ */
     printf("\n[test] === enabling dirty tracking ===\n");
@@ -114,7 +115,7 @@ int main(void)
 
     printf("[test] launching read kernel (%d pages) ...\n", NUM_PAGES);
     kernel_read<<<1, 1>>>(managed, NUM_INTS, sink);
-    CHECK(cudaDeviceSynchronize());
+    CUDA_CHECK(cudaDeviceSynchronize());
     printf("[test] read kernel done (sink=%d)\n", *sink);
     printf("[test] >>> expect dmesg: access=1 -> prot=1 (READ_ONLY) for all %d pages\n\n",
            NUM_PAGES);
@@ -135,8 +136,8 @@ int main(void)
     printf("[test] === disabling dirty tracking ===\n");
     /* set_dirty_tracking(0); */ // USE PROCFS INSTEAD
 
-    CHECK(cudaFree(managed));
-    CHECK(cudaFree(sink));
+    CUDA_CHECK(cudaFree(managed));
+    CUDA_CHECK(cudaFree(sink));
 
     printf("[test] done — run: sudo dmesg | grep 'DIRTY-TRACK.*perm'\n");
     return 0;

@@ -7,3 +7,5 @@ _out/
 cscope.*
 tags
 compile.sh
+tests/test_dirty_tracking
+tests/test_dirty_tracking_suite
