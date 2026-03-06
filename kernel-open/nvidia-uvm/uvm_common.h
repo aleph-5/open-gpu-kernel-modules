@@ -44,30 +44,30 @@
 
 // EDIT BY ADITI KHANDELIA
 
-extern int uvm_dirty_tracking;
-
 struct dirty_page_info {
     unsigned long page_number;
 	unsigned long timestamp;
-    unsigned long instruction_address;
-
 	// EDIT BY VIDHI JAIN
 	pid_t pid;
 	// END OF EDIT
-	
 };
 
 struct uvm_dirty_page_table {
+    pid_t pid;
     struct xarray pages;
 };
 
-void uvm_dirty_page_table_init(void);
+bool uvm_dirty_tracking_active_for_pid(pid_t pid);
 
-void uvm_dirty_page_table_destroy(void);
+struct uvm_dirty_page_table* uvm_dirty_page_table_by_pid(pid_t pid);
 
-NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp, unsigned long instruction_address, pid_t pid);
+NV_STATUS uvm_dirty_page_table_init(pid_t pid);
 
-struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number);
+NV_STATUS uvm_dirty_page_table_destroy(pid_t pid);
+
+NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp, pid_t pid);
+
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, pid_t pid);
 // END OF EDIT
 
 // EDIT BY ARUSH

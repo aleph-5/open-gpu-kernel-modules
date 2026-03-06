@@ -39,57 +39,62 @@ void (*uvm_dirty_invalidate_fn)(void) = NULL;
 // END OF EDIT
 
 // EDIT BY ADITI KHANDELIA
-int uvm_dirty_tracking = 0;
-static int uvm_dirty_tracking_set(const char *val, 
-    const struct kernel_param *kp)
-{
-    int ret = param_set_int(val, kp);
-    if (ret)
-        return ret;
-    if (uvm_dirty_tracking) {
-        // EDIT BY ARUSH
-        if (uvm_dirty_invalidate_fn)
-            uvm_dirty_invalidate_fn();
-        // END OF EDIT
-        uvm_dirty_page_table_init();
-    }
-    else
-        uvm_dirty_page_table_destroy();
-        
-    return 0;
+static DEFINE_XARRAY(pid_to_page_table_xa);
+static struct xarray *pid_to_page_table = &pid_to_page_table_xa;
+
+bool uvm_dirty_tracking_active_for_pid(pid_t pid) {
+    struct uvm_dirty_page_table* page_table = uvm_dirty_page_table_by_pid(pid);
+    return page_table != NULL;
 }
 
-static const struct kernel_param_ops uvm_dirty_tracking_ops = {
-    .set = uvm_dirty_tracking_set,
-    .get = param_get_int,
-};
-module_param_cb(uvm_dirty_tracking, &uvm_dirty_tracking_ops, &uvm_dirty_tracking, S_IRUGO|S_IWUSR);
-MODULE_PARM_DESC(uvm_dirty_tracking, "Enable tracking of dirty pages in UVM (default: 0)");
-int uvm_dirty_counter = 0;
-// END OF EDIT 
-
-// EDIT BY ADITI KHANDELIA
-struct uvm_dirty_page_table* page_table_pointer = NULL;
-
-void uvm_dirty_page_table_init() {
-    if (page_table_pointer != NULL) {
-        uvm_dirty_page_table_destroy();
-        printk(KERN_WARNING "Dirty page table was already initialized, reinitializing it\n");
+struct uvm_dirty_page_table* uvm_dirty_page_table_by_pid(pid_t pid) {
+    struct uvm_dirty_page_table* page_table = xa_load(pid_to_page_table, pid);
+    if (page_table == NULL) {
+        printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
+        return NULL;
     }
+    return page_table;
+}
+
+NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
+
+    struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
+
+    if (page_table_pointer != NULL) {
+        NV_STATUS destruction_status = uvm_dirty_page_table_destroy(pid);
+        if (destruction_status != NV_OK) {
+            printk(KERN_ERR "Failed to destroy existing dirty page table for pid %d\n", pid);
+            return NV_ERR_GENERIC;
+        }
+        printk(KERN_WARNING "Dirty page table was already initialized, reinitializing it for pid %d\n", pid);
+    }
+
     page_table_pointer = kmalloc(sizeof(struct uvm_dirty_page_table), GFP_KERNEL);
     if (page_table_pointer == NULL) {
-        printk(KERN_ERR "Failed to allocate memory for dirty page table\n");
-        return;
+        printk(KERN_ERR "Failed to allocate memory for dirty page table for pid %d\n", pid);
+        return NV_ERR_NO_MEMORY;
     }
     xa_init(&page_table_pointer->pages);
-    printk(KERN_INFO "Dirty page table initialized\n");
+
+    void* ret = xa_store(pid_to_page_table, pid, page_table_pointer, GFP_KERNEL);
+    if (xa_err(ret)) {
+        printk(KERN_ERR "Failed to store dirty page table in xarray for pid %d\n", pid);
+        kfree(page_table_pointer);
+        return NV_ERR_NO_MEMORY;
+    }
+
+    printk(KERN_INFO "Dirty page table initialized for pid %d\n", pid);
+    return NV_OK;
 }
 
-void uvm_dirty_page_table_destroy() {
+NV_STATUS uvm_dirty_page_table_destroy(pid_t pid) {
+    struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
+
     if (page_table_pointer == NULL) {
-        printk(KERN_ERR "Dirty page table not initialized\n");
-        return;
+        printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
+        return NV_ERR_GENERIC;
     }
+
     unsigned long index;
     struct dirty_page_info *info;
     xa_for_each(&page_table_pointer->pages, index, info) {
@@ -97,57 +102,69 @@ void uvm_dirty_page_table_destroy() {
     }
     xa_destroy(&page_table_pointer->pages);
     kfree(page_table_pointer);
-    page_table_pointer = NULL;
-    printk(KERN_INFO "Dirty page table destroyed\n");
+    xa_erase(pid_to_page_table, pid);
+    printk(KERN_INFO "Dirty page table destroyed for pid %d\n", pid);
+
+    return NV_OK;
 }
 
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp,
-    unsigned long instruction_address,
     pid_t pid) { // (EDIT BY VIDHI JAIN)
-    
-    struct dirty_page_info *info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
+
+    struct dirty_page_info* existing_info = uvm_dirty_page_table_lookup(page_number, pid);
+    if (existing_info != NULL) {
+        printk(KERN_INFO "Dirty page info already exists for page_number=0x%lx for pid %d, skipping\n", page_number, pid);
+        return NV_OK;
+    }
+
+    struct dirty_page_info* info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
     if (info == NULL) {
         printk(KERN_ERR "Failed to allocate memory for dirty page info\n");
         return NV_ERR_NO_MEMORY;
     }
+
     info->page_number = page_number;
     info->timestamp = timestamp;
-    info->instruction_address = instruction_address;
-
     // EDIT BY VIDHI JAIN
     info->pid = pid;
     // END OF EDIT
 
+    struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
+
     if (page_table_pointer == NULL) {
-        printk(KERN_ERR "Dirty page table not initialized\n");
+        printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
         kfree(info);
         return NV_ERR_NO_MEMORY;
     }
+
     void* ret = xa_store(&page_table_pointer->pages, page_number, info, GFP_ATOMIC);
     if (xa_err(ret)) {
-        printk(KERN_ERR "Failed to store dirty page info in xarray\n");
+        printk(KERN_ERR "Failed to store dirty page info in xarray for pid %d\n", pid);
         kfree(info);
         return NV_ERR_NO_MEMORY;
     }
-    uvm_dirty_counter++;
-    printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu, instruction_address=%lu\n",
-           page_number, timestamp, instruction_address);
+
+    printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu\n", page_number, timestamp);
     return NV_OK;
 }
 
-struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number) {
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, 
+    pid_t pid) {
+    struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
     if (page_table_pointer == NULL) {
-        printk(KERN_ERR "Dirty page table not initialized\n");
+        printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
         return NULL;
     }
+
     struct dirty_page_info *info = xa_load(&page_table_pointer->pages, page_number);
     if (info == NULL) {
-        printk(KERN_INFO "No dirty page info found for page_number=%lu\n", page_number);
+        printk(KERN_INFO "No dirty page info found for page_number=%lu for pid %d\n", page_number, pid);
         return NULL;    
     }
-    printk(KERN_INFO "Found dirty page info: page_number=0x%lx, timestamp=%lu, instruction_address=%lu\n",
-           info->page_number, info->timestamp, info->instruction_address);
+
+    printk(KERN_INFO "Found dirty page info: page_number=0x%lx, timestamp=%lu for pid %d\n",
+           info->page_number, info->timestamp, info->pid);
     return info;
 }
 
@@ -178,31 +195,24 @@ static const struct proc_ops dirty_range_fops = {
 
 // EDIT BY ARUSH - procfs query interface
 #if defined(CONFIG_PROC_FS)
-
-/*
- * seq_file show callback. single_open() calls this exactly once per open()
- * with __v = SEQ_START_TOKEN; the parameter is unused in the single-page case.
- */
+// EDIT BY ADITI KHANDELIA
+static pid_t dirty_query_pid = 0;
+// END OF EDIT
 static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 {
     unsigned long index;
     struct dirty_page_info *info;
 
+    struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(dirty_query_pid);
+
     if (page_table_pointer == NULL) {
-        seq_printf(s, "# dirty tracking not active\n");
+        seq_printf(s, "# dirty tracking not active for pid %d\n", dirty_query_pid);
         return 0;
     }
 
     seq_printf(s, "# page_address_hex timestamp_ns pid\n");
 
     // EDIT BY VIDHI JAIN
-
-    /*xa_for_each(&page_table_pointer->pages, index, info) {
-        seq_printf(s, "0x%lx %lu %d\n",
-                   index << PAGE_SHIFT,
-                   info->timestamp,
-                   info->pid); // EDIT BY VIDHI JAIN
-    }*/
 
     unsigned long start_index = dirty_query_start >> PAGE_SHIFT;
     unsigned long end_index = (dirty_query_end - 1) >> PAGE_SHIFT;
@@ -233,6 +243,62 @@ static int nv_procfs_read_dirty_pages_entry(struct seq_file *s, void *v)
 
 UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_pages_entry);
 
+
+// EDIT BY ADITI KHANDELIA
+static ssize_t dirty_pids_start_write(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
+
+    pid_t pid = current->tgid;
+    uvm_dirty_page_table_init(pid);
+    if (uvm_dirty_invalidate_fn) {
+        uvm_dirty_invalidate_fn();
+    }
+    return count;
+}
+
+static const struct proc_ops dirty_pids_start_fops = {
+    .proc_write = dirty_pids_start_write,
+};
+
+static ssize_t dirty_pids_stop_write(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
+
+    pid_t pid = current->tgid;
+    uvm_dirty_page_table_destroy(pid);
+    return count;
+}
+
+static const struct proc_ops dirty_pids_stop_fops = {
+    .proc_write = dirty_pids_stop_write,
+};
+
+static ssize_t pid_to_query_for_dirty_tracking(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
+
+    char kbuf[32];
+
+    if (copy_from_user(kbuf, buf, min(count, sizeof(kbuf))))
+        return -EFAULT;
+
+    pid_t pid;
+    sscanf(kbuf, "%d", &pid);
+    dirty_query_pid = pid;
+
+    printk(KERN_INFO "DIRTY_PIDS set: tracking dirty pages for pid %d\n", dirty_query_pid);
+    return count;
+}
+
+static const struct proc_ops pid_to_query_fops = {
+    .proc_write = pid_to_query_for_dirty_tracking,
+};
+// END OF EDIT
+
 NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
 {
     struct proc_dir_entry *entry;
@@ -250,6 +316,28 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
         return NV_ERR_OPERATING_SYSTEM;
     // END OF EDIT
 
+    // EDIT BY ADITI KHANDELIA
+    entry = proc_create("dirty_pids_start_track",
+                        0666,
+                        parent,
+                        &dirty_pids_start_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+
+    entry = proc_create("dirty_pids_stop_track",
+                        0666,
+                        parent,
+                        &dirty_pids_stop_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+
+    entry = proc_create("dirty_pid_to_query",
+                        0666,
+                        parent,
+                        &pid_to_query_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    
     return NV_OK;
 }
 

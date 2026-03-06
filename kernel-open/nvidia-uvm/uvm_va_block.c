@@ -11121,7 +11121,7 @@ static uvm_prot_t compute_new_permission(uvm_va_block_t *va_block,
         if (uvm_processor_mask_empty(revoke_processors))
             new_prot = UVM_PROT_READ_WRITE;
         // EDIT BY ADITI KHANDELIA
-        if (uvm_dirty_tracking && access_type < UVM_FAULT_ACCESS_TYPE_WRITE)
+        if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid) && access_type < UVM_FAULT_ACCESS_TYPE_WRITE)
             new_prot = UVM_PROT_READ_ONLY;
         // END OF EDIT
     }
@@ -11142,7 +11142,7 @@ static uvm_prot_t compute_new_permission(uvm_va_block_t *va_block,
     }
 
     // EDIT BY ARUSH - verify read-only mapping under dirty tracking
-    if (uvm_dirty_tracking)
+    if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid))
         printk(KERN_INFO "[DIRTY-TRACK] perm: VA=0x%llx access=%d -> prot=%d (%s)\n",
                va_block->start + ((NvU64)page_index << PAGE_SHIFT),
                access_type,

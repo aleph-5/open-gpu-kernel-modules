@@ -1618,12 +1618,12 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
            fault_addr);
 
         // EDIT BY ADITI KHANDELIA
-        if (uvm_dirty_tracking && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
+        if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid) && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
 
             // EDIT BY VIDHI JAIN
             pid_t pid = va_block->creator_pid;
-            uvm_dirty_page_table_record(page_number, ktime_get_ns(), 0, pid);
+            uvm_dirty_page_table_record(page_number, ktime_get_ns(), pid);
             // END OF EDIT
 
         }
