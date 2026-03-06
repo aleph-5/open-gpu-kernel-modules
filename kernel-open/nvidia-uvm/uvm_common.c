@@ -28,6 +28,10 @@
 #endif
 // END OF EDIT
 
+// EDIT BY VIDHI JAIN
+static unsigned long dirty_query_start = 0UL;
+static unsigned long dirty_query_end = ~0UL;
+// END OF EDIT
 
 // EDIT BY ADITI KHANDELIA
 int uvm_dirty_tracking = 0;
@@ -88,7 +92,8 @@ void uvm_dirty_page_table_destroy() {
 
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp,
-    unsigned long instruction_address) {
+    unsigned long instruction_address,
+    pid_t pid) { // (EDIT BY VIDHI JAIN)
     
     struct dirty_page_info *info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
     if (info == NULL) {
@@ -98,6 +103,11 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     info->page_number = page_number;
     info->timestamp = timestamp;
     info->instruction_address = instruction_address;
+
+    // EDIT BY VIDHI JAIN
+    info->pid = pid;
+    // END OF EDIT
+
     if (page_table_pointer == NULL) {
         printk(KERN_ERR "Dirty page table not initialized\n");
         kfree(info);
@@ -110,7 +120,7 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
         return NV_ERR_NO_MEMORY;
     }
     uvm_dirty_counter++;
-    printk(KERN_INFO "Recorded dirty page: page_number=%lu, timestamp=%lu, instruction_address=%lu\n",
+    printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu, instruction_address=%lu\n",
            page_number, timestamp, instruction_address);
     return NV_OK;
 }
@@ -125,10 +135,36 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number) {
         printk(KERN_INFO "No dirty page info found for page_number=%lu\n", page_number);
         return NULL;    
     }
-    printk(KERN_INFO "Found dirty page info: page_number=%lu, timestamp=%lu, instruction_address=%lu\n",
+    printk(KERN_INFO "Found dirty page info: page_number=0x%lx, timestamp=%lu, instruction_address=%lu\n",
            info->page_number, info->timestamp, info->instruction_address);
     return info;
 }
+
+// EDIT BY VIDHI JAIN
+static ssize_t dirty_range_write(struct file *file,
+                                 const char __user *buf,
+                                 size_t count,
+                                 loff_t *ppos)
+{
+    char kbuf[64];
+
+    if(copy_from_user(kbuf, buf, min(count, sizeof(kbuf))))
+        return -EFAULT;
+
+    sscanf(kbuf, "%lx %lx", &dirty_query_start, &dirty_query_end);
+
+    printk(KERN_INFO "DIRTY_RANGE set: 0x%lx - 0x%lx\n",
+           dirty_query_start, dirty_query_end);
+
+    return count;
+}
+
+static const struct proc_ops dirty_range_fops = {
+    .proc_write = dirty_range_write,
+};
+
+// END OF EDIT
+
 // EDIT BY ARUSH - procfs query interface
 #if defined(CONFIG_PROC_FS)
 
@@ -146,12 +182,36 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
         return 0;
     }
 
-    seq_printf(s, "# page_address_hex timestamp_ns\n");
-    xa_for_each(&page_table_pointer->pages, index, info) {
-        seq_printf(s, "0x%lx %lu\n",
+    seq_printf(s, "# page_address_hex timestamp_ns pid\n");
+
+    // EDIT BY VIDHI JAIN
+
+    /*xa_for_each(&page_table_pointer->pages, index, info) {
+        seq_printf(s, "0x%lx %lu %d\n",
                    index << PAGE_SHIFT,
-                   info->timestamp);
+                   info->timestamp,
+                   info->pid); // EDIT BY VIDHI JAIN
+    }*/
+
+    unsigned long start_index = dirty_query_start >> PAGE_SHIFT;
+    unsigned long end_index = (dirty_query_end - 1) >> PAGE_SHIFT;
+
+    index = start_index;
+
+    while((info = xa_find(&page_table_pointer->pages,
+                          &index,
+                          end_index,
+                          XA_PRESENT))){
+        seq_printf(s,
+                   "0x%lx %lu %d\n",
+                   index << PAGE_SHIFT,
+                   info->timestamp,
+                   info->pid);
+        index++;
     }
+
+    // END OF EDIT
+
     return 0;
 }
 
@@ -169,6 +229,15 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
     entry = NV_CREATE_PROC_FILE("dirty_pages", parent, dirty_pages_entry, NULL);
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
+    
+    // EDIT BY VIDHI JAIN
+    entry = proc_create("dirty_range",
+                        0666,
+                        parent,
+                        &dirty_range_fops);
+    if(entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    // END OF EDIT
 
     return NV_OK;
 }

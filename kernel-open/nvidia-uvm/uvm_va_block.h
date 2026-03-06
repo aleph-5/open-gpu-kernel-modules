@@ -281,6 +281,7 @@ struct uvm_va_block_struct
     //
     // This isn't protected by the lock on the eviction path, so it must be
     // atomic. nv_kref provides that.
+
     nv_kref_t kref;
 
     // Lock protecting the block. See the comment at the top of uvm.c.
@@ -302,6 +303,10 @@ struct uvm_va_block_struct
     // write mode.
     NvU64 start;
     NvU64 end;
+
+	// EDIT BY VIDHI JAIN
+	pid_t creator_pid;
+	// END OF EDIT
 
     // Per-processor residency bit vector, used for fast lookup of which
     // processors are active in this block.

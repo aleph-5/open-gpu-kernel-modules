@@ -42,13 +42,13 @@
 #include "uvm_test.h"
 
 // ARUSH: More verbose prints
-static const char *fault_access_type_str[] = {
-    "PREFETCH",
-    "READ",
-    "WRITE",
-    "ATOMIC_WEAK",
-    "ATOMIC_STRONG"
-};
+/* static const char *fault_access_type_str[] = { */
+/*     "PREFETCH", */
+/*     "READ", */
+/*     "WRITE", */
+/*     "ATOMIC_WEAK", */
+/*     "ATOMIC_STRONG" */
+/* }; */
 
 
 // The documentation at the beginning of uvm_gpu_non_replayable_faults.c
@@ -1620,7 +1620,12 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
         // EDIT BY ADITI KHANDELIA
         if (uvm_dirty_tracking && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
-            uvm_dirty_page_table_record(page_number, ktime_get_ns(), 0);
+
+            // EDIT BY VIDHI JAIN
+            pid_t pid = va_block->creator_pid;
+            uvm_dirty_page_table_record(page_number, ktime_get_ns(), 0, pid);
+            // END OF EDIT
+
         }
         // EDIT OF EDIT
 
