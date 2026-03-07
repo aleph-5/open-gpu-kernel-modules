@@ -29,6 +29,7 @@
 // END OF EDIT
 
 // EDIT BY VIDHI JAIN
+static DEFINE_SPINLOCK(dirty_query_lock); // ( EDIT BY ADITI KHANDELIA)
 static unsigned long dirty_query_start = 0UL;
 static unsigned long dirty_query_end = ~0UL;
 // END OF EDIT
@@ -179,11 +180,13 @@ static ssize_t dirty_range_write(struct file *file,
     if(copy_from_user(kbuf, buf, min(count, sizeof(kbuf))))
         return -EFAULT;
 
+    spin_lock(&dirty_query_lock);
     sscanf(kbuf, "%lx %lx", &dirty_query_start, &dirty_query_end);
 
     printk(KERN_INFO "DIRTY_RANGE set: 0x%lx - 0x%lx\n",
            dirty_query_start, dirty_query_end);
-
+    spin_unlock(&dirty_query_lock);
+    
     return count;
 }
 
@@ -214,8 +217,18 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 
     // EDIT BY VIDHI JAIN
 
+    spin_lock(&dirty_query_lock);
     unsigned long start_index = dirty_query_start >> PAGE_SHIFT;
     unsigned long end_index = (dirty_query_end - 1) >> PAGE_SHIFT;
+    spin_unlock(&dirty_query_lock);
+
+    // EDIT BY ADITI KHANDELIA
+    if (dirty_query_end <= dirty_query_start) {
+        seq_printf(s, "# invalid range: start 0x%lx is greater than end 0x%lx\n",
+                   dirty_query_start, dirty_query_end);
+        return 0;
+    }
+    // END OF EDIT
 
     index = start_index;
 
