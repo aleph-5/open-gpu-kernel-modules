@@ -11141,17 +11141,6 @@ static uvm_prot_t compute_new_permission(uvm_va_block_t *va_block,
         new_prot = UVM_PROT_READ_ONLY;
     }
 
-    // EDIT BY ARUSH - verify read-only mapping under dirty tracking
-    if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid))
-        printk(KERN_INFO "[DIRTY-TRACK] perm: VA=0x%llx access=%d -> prot=%d (%s)\n",
-               va_block->start + ((NvU64)page_index << PAGE_SHIFT),
-               access_type,
-               new_prot,
-               new_prot == UVM_PROT_READ_ONLY        ? "READ_ONLY"         :
-               new_prot == UVM_PROT_READ_WRITE        ? "READ_WRITE"        :
-                                                        "READ_WRITE_ATOMIC");
-    // END OF EDIT
-
     return new_prot;
 }
 

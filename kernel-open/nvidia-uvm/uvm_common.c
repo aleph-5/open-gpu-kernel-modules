@@ -159,7 +159,7 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
 
     struct dirty_page_info *info = xa_load(&page_table_pointer->pages, page_number);
     if (info == NULL) {
-        printk(KERN_INFO "No dirty page info found for page_number=%lu for pid %d\n", page_number, pid);
+        printk(KERN_INFO "No dirty page info found for page_number=0x%lx for pid %d\n", page_number, pid);
         return NULL;    
     }
 

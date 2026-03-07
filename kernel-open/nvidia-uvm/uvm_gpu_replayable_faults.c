@@ -1322,12 +1322,6 @@ static uvm_fault_access_type_t check_fault_access_permissions(uvm_gpu_t *gpu,
                                                          fault_entry->fault_access_type,
                                                          allow_migration);
 
-    printk(KERN_ERR "[FAULT-TRACE-3] check_fault_access_permissions: VA=0x%llx "
-           "access_type=%d perm_status=%d\n",
-           fault_entry->fault_address,
-           fault_entry->fault_access_type,
-           perm_status);
-
     if (perm_status == NV_OK)
         return fault_entry->fault_access_type;
 
@@ -1424,12 +1418,6 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
     BUILD_BUG_ON(UVM_FAULT_ACCESS_TYPE_COUNT > (int)(NvU8)-1);
 
     uvm_assert_mutex_locked(&va_block->lock);
-
-    printk(KERN_ERR "[FAULT-TRACE-2] service_fault_batch_block_locked: "
-           "block=[0x%llx, 0x%llx] first_fault VA=0x%llx access_type=%d\n",
-           va_block->start, va_block->end,
-           first_fault_entry->fault_address,
-           first_fault_entry->fault_access_type);
 
     *block_faults = 0;
 
@@ -1603,19 +1591,7 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
 
         ++page_fault_count;
 
-        printk(KERN_ERR "[FAULT-TRACE-3.5] page_fault_count=%u VA=0x%llx "
-               "page_index=%u access_type=%d block=[0x%llx, 0x%llx]\n",
-               page_fault_count,
-               current_entry->fault_address,
-               page_index,
-               service_access_type,
-               va_block->start, va_block->end);
-
 		NvU64 fault_addr = va_block->start + ((NvU64)page_index << PAGE_SHIFT);
-
-        printk(KERN_ERR "[FAULT-TRACE-VA] page_index=%u VA=0x%llx\n",
-           page_index,
-           fault_addr);
 
         // EDIT BY ADITI KHANDELIA
         if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid) && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
@@ -1642,10 +1618,6 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
     if (page_fault_count > 0) {
         block_context->region = uvm_va_block_region(first_page_index, last_page_index + 1);
         status = uvm_va_block_service_locked(gpu->id, va_block, va_block_retry, block_context);
-
-        printk(KERN_ERR "[FAULT-TRACE-4] uvm_va_block_service_locked: "
-               "page_fault_count=%u status=%d\n",
-               page_fault_count, status);
     }
 
     *block_faults = i - first_fault_index;
@@ -2981,8 +2953,6 @@ void uvm_parent_gpu_service_replayable_faults(uvm_parent_gpu_t *parent_gpu)
     uvm_fault_service_batch_context_t *batch_context = &replayable_faults->batch_service_context;
 
     UVM_ASSERT(parent_gpu->replayable_faults_supported);
-
-    printk(KERN_ERR "[FAULT-TRACE-1] uvm_parent_gpu_service_replayable_faults: ENTER\n");
 
     uvm_tracker_init(&batch_context->tracker);
 
