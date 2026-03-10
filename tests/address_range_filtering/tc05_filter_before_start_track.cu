@@ -99,6 +99,18 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
 static void set_range(unsigned long s, unsigned long e) {
     char b[64];
     snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e);
@@ -166,7 +178,7 @@ int main(void) {
     printf("[tc05] dirty_range set to first half BEFORE start_track\n");
 
     /* Step 2: start tracking (table init + GPU PTE invalidation). */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc05] start_track issued\n");
 
     /* Step 3: write ALL pages concurrently — both halves. */
@@ -201,7 +213,7 @@ int main(void) {
     printf("[tc05] readB (range=all):        total=%d  first_half=%d (want %d)  second_half=%d\n",
            nB, fh_B, HALF_PAGES, sh_B);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

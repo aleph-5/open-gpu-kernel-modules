@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 /* Two non-overlapping halves of a single allocation. */
 #define NUM_PAGES     16
@@ -45,6 +46,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -91,11 +108,11 @@ int main(void) {
     set_query_pid(pid);
 
     /* ---- epoch 1: write first half ---- */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     gpu_write_range<<<1, 32>>>(managed, 0, HALF_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc05] epoch 1: wrote pages 0..%d\n", HALF_PAGES - 1);
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     printf("[tc05] epoch 1: stopped\n");
 
     /* touch second half now — tracking is OFF, these must not appear in epoch 2 */
@@ -105,12 +122,13 @@ int main(void) {
            HALF_PAGES, NUM_PAGES - 1);
 
     /* ---- epoch 2: write second half under fresh table ---- */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     gpu_write_range<<<1, 32>>>(managed, HALF_PAGES, HALF_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc05] epoch 2: wrote pages %d..%d\n", HALF_PAGES, NUM_PAGES - 1);
 
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
     printf("[tc05] epoch 2 query: %d entries\n", n);
 
@@ -124,7 +142,7 @@ int main(void) {
         printf("[tc05]   [%d] addr=0x%lx ts=%lu pid=%d\n",
                i, e[i].addr, e[i].ts, e[i].pid);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n < 0 || epoch1_present != 0 || epoch2_present != HALF_PAGES);

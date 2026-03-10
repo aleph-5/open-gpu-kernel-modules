@@ -86,6 +86,18 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
 /*
  * dirty_range_write uses sscanf(kbuf, "%lx %lx", ...) — %lx handles the 0x
  * prefix, and dirty_query_end is exclusive (kernel does (end-1)>>PAGE_SHIFT).
@@ -152,7 +164,7 @@ int main(void) {
 
     set_query_pid(pid);
     reset_range();
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* Two CPU threads launch concurrent GPU writes to separate allocations. */
     thread_arg_t args[2] = { { alloc_a, dev }, { alloc_b, dev } };
@@ -182,7 +194,7 @@ int main(void) {
     printf("[tc01] phase2 (range=all):    total=%d  in_a=%d (want %d)  in_b=%d (want %d)\n",
            n2, a_p2, NUM_PAGES, b_p2, NUM_PAGES);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(alloc_a));
     CUDA_CHECK(cudaFree(alloc_b));
     free(e);

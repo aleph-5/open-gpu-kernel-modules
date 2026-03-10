@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   8
 #define PAGE_SIZE   4096
@@ -46,6 +47,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -90,7 +107,7 @@ int main(void) {
     pid_t pid = getpid();
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     int total_errors = 0;
 
@@ -99,7 +116,7 @@ int main(void) {
         int prev_page = cycle - 1;
 
         if (cycle > 0) {
-            procfs_write(PROCFS_START, "1\n");
+            start_track(pid);
             printf("[tc04] cycle %d: reinit\n", cycle);
         } else {
             printf("[tc04] cycle %d: initial table\n", cycle);
@@ -110,6 +127,7 @@ int main(void) {
 
         /* Query. */
         entry_t e[MAX_ENTRIES];
+        set_range_full();
         int n = read_pages(e, MAX_ENTRIES);
 
         int cur_present  = page_tracked(e, n, (unsigned long)managed + cur_page  * PAGE_SIZE);
@@ -130,7 +148,7 @@ int main(void) {
         total_errors += cycle_err;
     }
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     printf("[tc04] %s (%d error(s) across %d cycles)\n",

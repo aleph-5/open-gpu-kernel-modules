@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   8
 #define PAGE_SIZE   4096
@@ -48,6 +49,22 @@ static void set_query_pid(pid_t p)
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
+}
+
 static int read_pages(entry_t *out, int max)
 {
     FILE *f = fopen(PROCFS_PAGES, "r");
@@ -84,7 +101,7 @@ int main(void)
     set_query_pid(pid);
 
     /* ---- init table A ---- */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc03] table A initialized\n");
 
     /* ---- write: populate table A ---- */
@@ -92,26 +109,28 @@ int main(void)
     CUDA_CHECK(cudaDeviceSynchronize());
 
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n_before = read_pages(e, MAX_ENTRIES);
     printf("[tc03] table A entries before stop: %d\n", n_before);
     for (int i = 0; i < n_before; i++)
         printf("[tc03]   entry %d: addr=0x%lx ts=%lu pid=%d\n", i, e[i].addr, e[i].ts, e[i].pid);
 
     /* ---- destroy table A ---- */
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     printf("[tc03] table A destroyed\n");
 
     /* ---- create table B (fresh) ---- */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc03] table B initialized — no writes will follow\n");
 
     /* ---- query table B: must be 0 entries (active but empty) ---- */
+    set_range_full();
     int n_after = read_pages(e, MAX_ENTRIES);
     printf("[tc03] table B entries (no writes since start): %d\n", n_after);
     
 
     /* ---- teardown ---- */
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     /*

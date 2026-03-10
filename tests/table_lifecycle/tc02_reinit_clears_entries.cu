@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   8
 #define PAGE_SIZE   4096
@@ -43,6 +44,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -89,14 +106,14 @@ int main(void) {
     set_query_pid(pid);
     int half = NUM_PAGES / 2;
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc02] initial start_track\n");
 
     gpu_write_range<<<1, 100>>>(managed, 0, half);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc02] wrote pages 0..%d (pre-reinit)\n", half - 1);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc02] reinit (start_track again) — old entries should be cleared\n");
 
     gpu_write_range<<<1, 1>>>(managed, half, NUM_PAGES);
@@ -104,6 +121,7 @@ int main(void) {
     printf("[tc02] wrote pages %d..%d (post-reinit)\n", half, NUM_PAGES - 1);
 
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
     printf("[tc02] query returned %d entries\n", n);
     for (int i = 0; i < n; i++)
@@ -124,7 +142,7 @@ int main(void) {
     printf("[tc02] ghost=%d missing=%d present=%d (total entries=%d)\n",
            ghost, missing, present, n);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n < 0 || ghost > 0 || missing > 0);

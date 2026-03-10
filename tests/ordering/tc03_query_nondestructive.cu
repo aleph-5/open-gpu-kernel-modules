@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   8
 #define PAGE_SIZE   4096
@@ -43,6 +44,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -88,7 +105,7 @@ int main(void) {
     printf("[tc03] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* round 1: write first half */
     gpu_write_range<<<1, 32>>>(managed, 0, half);
@@ -96,6 +113,7 @@ int main(void) {
     printf("[tc03] wrote pages 0..%d (round 1)\n", half - 1);
 
     entry_t snap1[MAX_ENTRIES];
+    set_range_full();
     int n1 = read_pages(snap1, MAX_ENTRIES);
     int r1_in_snap1 = count_in_range(snap1, n1, (unsigned long)managed, 0, half);
     int r2_in_snap1 = count_in_range(snap1, n1, (unsigned long)managed, half, NUM_PAGES);
@@ -108,13 +126,14 @@ int main(void) {
     printf("[tc03] wrote pages %d..%d (round 2)\n", half, NUM_PAGES - 1);
 
     entry_t snap2[MAX_ENTRIES];
+    set_range_full();
     int n2 = read_pages(snap2, MAX_ENTRIES);
     int r1_in_snap2 = count_in_range(snap2, n2, (unsigned long)managed, 0, half);
     int r2_in_snap2 = count_in_range(snap2, n2, (unsigned long)managed, half, NUM_PAGES);
     printf("[tc03] snap2: %d entries  round1=%d/%d  round2=%d/%d (expect %d,%d)\n",
            n2, r1_in_snap2, half, r2_in_snap2, half, half, half);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     /* snap1 must have round-1 pages but not round-2 (not yet written)

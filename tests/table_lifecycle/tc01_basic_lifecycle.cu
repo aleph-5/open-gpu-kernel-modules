@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   100
 #define PAGE_SIZE   4096
@@ -41,6 +42,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -82,13 +99,14 @@ int main(void) {
     printf("[tc01] PID: %d\n", pid);
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc01] table initialized (pid=%d)\n", pid);
 
     gpu_write<<<1, 100>>>(managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
     int miss = 0;
     for (int p = 0; p < NUM_PAGES; p++)
@@ -97,10 +115,11 @@ int main(void) {
     for (int i = 0; i < n; i++)
         printf("[tc01]   entry %d: addr=0x%lx ts=%lu pid=%d\n", i, e[i].addr, e[i].ts, e[i].pid);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     printf("[tc01] table destroyed\n");
 
     entry_t e2[MAX_ENTRIES];
+    set_range_full();
     int n2 = read_pages(e2, MAX_ENTRIES);
     printf("[tc01] post-destroy query returned: %d (expected -2)\n", n2);
 

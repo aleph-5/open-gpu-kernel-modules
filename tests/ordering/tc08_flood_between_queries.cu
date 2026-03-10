@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 /* Two-phase write with a cross-phase timestamp ordering check.
  *
@@ -66,6 +67,22 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
+}
+
 static int read_pages(entry_t *out, int max) {
     FILE *f = fopen(PROCFS_PAGES, "r");
     if (!f) return -1;
@@ -105,7 +122,7 @@ int main(void) {
     printf("[tc08] pid=%d  phase-A=0x%lx  phase-B=0x%lx\n", pid, va_a, va_b);
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* phase A: small quiet kernel */
     phase_write<<<HALF_PAGES, PHASE_A_THREADS>>>(phase_a_base, HALF_PAGES, 1);
@@ -116,6 +133,7 @@ int main(void) {
     entry_t *snap_b = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!snap_a || !snap_b) { fprintf(stderr, "malloc failed\n"); return 1; }
 
+    set_range_full();
     int na = read_pages(snap_a, MAX_ENTRIES);
 
     /* find max timestamp in phase A */
@@ -133,6 +151,7 @@ int main(void) {
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc08] phase B complete (%d threads)\n", HALF_PAGES * PHASE_B_THREADS);
 
+    set_range_full();
     int nb = read_pages(snap_b, MAX_ENTRIES);
 
     /* ordering check: all phase-B entries must have ts >= max_ts_a */
@@ -160,7 +179,7 @@ int main(void) {
            nb - a_present, min_ts_b == (unsigned long)-1 ? 0 : min_ts_b, max_ts_a);
     printf("[tc08] b_missing=%d  ordering_violations=%d\n", b_missing, b_early);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(snap_a);
     free(snap_b);

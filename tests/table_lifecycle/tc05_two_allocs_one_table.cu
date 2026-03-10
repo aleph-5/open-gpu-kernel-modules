@@ -34,6 +34,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   4   /* pages per allocation */
 #define PAGE_SIZE   4096
@@ -69,6 +70,22 @@ static void set_query_pid(pid_t p)
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max)
@@ -130,7 +147,7 @@ int main(void)
     set_query_pid(pid);
 
     /* ---- single init ---- */
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc05] single table initialized (pid=%d)\n", pid);
 
     /* ---- write both allocations ---- */
@@ -144,6 +161,7 @@ int main(void)
 
     /* ---- query ---- */
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
 
     int miss_a = count_missing(e, n, alloc_a, NUM_PAGES);
@@ -154,7 +172,7 @@ int main(void)
     printf("[tc05] alloc B: %d/%d pages present\n", NUM_PAGES - miss_b, NUM_PAGES);
 
     /* ---- destroy ---- */
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(alloc_a));
     CUDA_CHECK(cudaFree(alloc_b));
 

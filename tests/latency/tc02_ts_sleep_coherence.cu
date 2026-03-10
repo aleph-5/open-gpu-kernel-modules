@@ -54,6 +54,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define BATCH_PAGES     32
 #define PAGE_SIZE       4096
@@ -91,6 +92,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_dirty(entry_t *out, int max) {
@@ -140,7 +157,7 @@ int main(void) {
     pid_t pid = getpid();
     printf("[tc02] pid=%d  alloc_a=0x%lx  alloc_b=0x%lx\n", pid, base_a, base_b);
     set_query_pid(pid);
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* --- Batch A --------------------------------------------------------- */
     long t_wall_start = ns_now();
@@ -167,6 +184,7 @@ int main(void) {
     int n = 0;
     long t_poll_deadline = ns_now() + (long)POLL_TIMEOUT_S * 1000000000L;
     while (1) {
+        set_range_full();
         n = read_dirty(e, MAX_ENTRIES);
         if (n >= 2 * BATCH_PAGES) break;
         if (ns_now() >= t_poll_deadline) break;
@@ -174,7 +192,7 @@ int main(void) {
     long t_read_done = ns_now();
     printf("[tc02] read %d/%d entries after poll\n", n, 2 * BATCH_PAGES);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
 
     /* --- Separate entries by allocation address -------------------------- */
     unsigned long ts_a_min = ~0UL, ts_a_max = 0;

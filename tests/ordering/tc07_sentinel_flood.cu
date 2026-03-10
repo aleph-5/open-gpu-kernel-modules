@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 /* Sentinel + 1M-thread flood ordering test.
  *
@@ -68,6 +69,22 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
+}
+
 static int read_pages(entry_t *out, int max) {
     FILE *f = fopen(PROCFS_PAGES, "r");
     if (!f) return -1;
@@ -110,13 +127,14 @@ int main(void) {
            pid, sentinel_va, flood_va);
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* step 1: sentinel */
     write_sentinel<<<1, 1>>>(sentinel_page);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     entry_t e1[MAX_ENTRIES];
+    set_range_full();
     int n1 = read_pages(e1, MAX_ENTRIES);
 
     unsigned long ts_sentinel = 0;
@@ -133,6 +151,7 @@ int main(void) {
     entry_t *e2 = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e2) { fprintf(stderr, "malloc failed\n"); return 1; }
 
+    set_range_full();
     int n2 = read_pages(e2, MAX_ENTRIES);
     printf("[tc07] post-flood query: %d entries\n", n2);
 
@@ -157,7 +176,7 @@ int main(void) {
     printf("[tc07] flood_missing=%d  ordering_violations=%d\n",
            flood_missing, early_violations);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e2);
 

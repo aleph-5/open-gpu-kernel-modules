@@ -103,6 +103,18 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
 /*
  * Write the range directly as hex pairs.  The kernel sscanf uses %lx which
  * accepts the 0x prefix.
@@ -172,7 +184,7 @@ int main(void) {
 
     set_query_pid(pid);
     reset_range();
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* All four threads write concurrently; all 16 pages land in the xarray. */
     thread_arg_t args[NUM_THREADS];
@@ -197,7 +209,7 @@ int main(void) {
     printf("[tc04] sanity (range=all): %d/%d pages recorded\n", recorded, NUM_PAGES);
     if (recorded != NUM_PAGES) {
         printf("[tc04] FAIL: not all pages recorded before filter tests (got %d)\n", recorded);
-        procfs_write(PROCFS_STOP, "1\n");
+        stop_track(pid);
         CUDA_CHECK(cudaFree(managed));
         free(e);
         return 1;
@@ -249,7 +261,7 @@ int main(void) {
         printf("[tc04] FAIL caseC: expected 0 pages (kernel should reject end=0), got %d\n", cC); failed = 1;
     }
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

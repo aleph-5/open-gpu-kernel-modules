@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   4
 #define PAGE_SIZE   4096
@@ -43,6 +44,22 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
+}
+
 static int read_pages(entry_t *out, int max) {
     FILE *f = fopen(PROCFS_PAGES, "r");
     if (!f) return -1;
@@ -75,10 +92,11 @@ int main(void) {
     printf("[tc04] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
     set_query_pid(pid);
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* query immediately — no GPU writes yet */
     entry_t pre[MAX_ENTRIES];
+    set_range_full();
     int n_pre = read_pages(pre, MAX_ENTRIES);
     printf("[tc04] pre-write query: %d entries (expected 0, not -2)\n", n_pre);
 
@@ -87,10 +105,11 @@ int main(void) {
     CUDA_CHECK(cudaDeviceSynchronize());
 
     entry_t post[MAX_ENTRIES];
+    set_range_full();
     int n_post = read_pages(post, MAX_ENTRIES);
     printf("[tc04] post-write query: %d entries (expected %d)\n", n_post, NUM_PAGES);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     /* n_pre==0  → table is active but empty (correct)

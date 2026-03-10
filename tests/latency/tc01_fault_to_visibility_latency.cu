@@ -38,6 +38,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES      64
 #define PAGE_SIZE      4096
@@ -75,6 +76,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_dirty(entry_t *out, int max) {
@@ -115,7 +132,7 @@ int main(void) {
     pid_t pid = getpid();
     printf("[tc01] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
     set_query_pid(pid);
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     write_pages<<<1, 256>>>(managed, NUM_PAGES * (int)INTS_PER_PAGE);
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -137,6 +154,7 @@ int main(void) {
      * latency measurement because that is what a real consumer would pay.
      */
     while (1) {
+        set_range_full();
         n = read_dirty(e, MAX_ENTRIES);
         polls++;
         long now = ns_now();
@@ -155,7 +173,7 @@ int main(void) {
     printf("[tc01] visibility latency: %ldus  (deadline %luus)  polls=%d  entries=%d/%d\n",
            latency_us, DEADLINE_US, polls, n < 0 ? 0 : n, NUM_PAGES);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

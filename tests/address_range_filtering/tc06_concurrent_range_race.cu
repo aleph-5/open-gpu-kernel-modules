@@ -88,6 +88,18 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
 typedef struct {
     char bufA[64];
     char bufB[64];
@@ -185,7 +197,7 @@ int main(void) {
 
     set_query_pid(pid);
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* Write all pages to the xarray before the race. */
     write_all<<<NUM_PAGES, 256>>>(managed, NUM_PAGES);
@@ -199,7 +211,7 @@ int main(void) {
            fh0, sh0, HALF_PAGES);
     if (fh0 != HALF_PAGES || sh0 != HALF_PAGES) {
         printf("[tc06] FAIL: not all pages recorded before race\n");
-        procfs_write(PROCFS_STOP, "1\n");
+        stop_track(pid);
         CUDA_CHECK(cudaFree(managed));
         return 1;
     }
@@ -237,7 +249,7 @@ int main(void) {
     printf("[tc06]   error   (procfs read failed): %ld\n", rarg.error);
 
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (rarg.torn > 0);

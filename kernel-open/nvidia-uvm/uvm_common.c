@@ -263,7 +263,22 @@ static ssize_t dirty_pids_start_write(struct file* file,
     size_t count,
     loff_t* ppos) {
 
+    char kbuf[64];
+    size_t to_copy = min(count, sizeof(kbuf) - 1); 
+    if (copy_from_user(kbuf, buf, to_copy))
+        return -EFAULT;
+    kbuf[to_copy] = '\0';
+    pid_t input_pid;
+    if (sscanf(kbuf, "%d", &input_pid) != 1) {
+        printk(KERN_ERR "Failed to parse PID from input: %s\n", kbuf);
+        return -EINVAL;
+    }
     pid_t pid = current->tgid;
+    if (input_pid != pid) {
+        printk(KERN_ERR "PID mismatch: input PID %d does not match current process PID %d. Not starting dirty tracking.\n", input_pid, pid);
+        return -EINVAL;
+    }
+
     uvm_dirty_page_table_init(pid);
     if (uvm_dirty_invalidate_fn) {
         uvm_dirty_invalidate_fn();
@@ -280,7 +295,22 @@ static ssize_t dirty_pids_stop_write(struct file* file,
     size_t count,
     loff_t* ppos) {
 
+    char kbuf[64];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy))
+        return -EFAULT;
+    kbuf[to_copy] = '\0';
+    pid_t input_pid;
+    if (sscanf(kbuf, "%d", &input_pid) != 1) {
+        printk(KERN_ERR "Failed to parse PID from input: %s\n", kbuf);
+        return -EINVAL;
+    }
     pid_t pid = current->tgid;
+    if (input_pid != pid) {
+        printk(KERN_ERR "PID mismatch: input PID %d does not match current process PID %d. Not stopping dirty tracking.\n", input_pid, pid);
+        return -EINVAL;
+    }
+
     uvm_dirty_page_table_destroy(pid);
     return count;
 }

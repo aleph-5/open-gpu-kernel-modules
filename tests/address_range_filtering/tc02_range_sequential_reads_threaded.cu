@@ -100,6 +100,18 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
 static void set_range(unsigned long s, unsigned long e) {
     char b[64];
     snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e);
@@ -172,7 +184,7 @@ int main(void) {
 
     set_query_pid(pid);
     reset_range();
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     /* Four CPU threads launch concurrent GPU writes to their respective quarters. */
     thread_arg_t args[NUM_QUARTERS];
@@ -222,7 +234,7 @@ int main(void) {
                q >= 2 ? PAGES_PER_QUARTER : 0,
                q >= 2 ? 0 : PAGES_PER_QUARTER);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

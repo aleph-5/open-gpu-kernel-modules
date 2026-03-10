@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 /* 4 streams, each writing 64 pages with 256 threads/block = 65,536 threads in flight.
  * All 4 streams are dispatched without sync between them.
@@ -59,6 +60,22 @@ static void set_query_pid(pid_t p) {
     procfs_write(PROCFS_QUERY, b);
 }
 
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
+}
+
 static int read_pages(entry_t *out, int max) {
     FILE *f = fopen(PROCFS_PAGES, "r");
     if (!f) return -1;
@@ -96,7 +113,7 @@ int main(void) {
     for (int s = 0; s < NUM_STREAMS; s++)
         CUDA_CHECK(cudaStreamCreate(&streams[s]));
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
 
     for (int s = 0; s < NUM_STREAMS; s++) {
         int *base = managed + s * PAGES_PER_STREAM * INTS_PER_PAGE;
@@ -109,6 +126,7 @@ int main(void) {
     entry_t *e = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e) { fprintf(stderr, "malloc failed\n"); return 1; }
 
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
     printf("[tc06] dirty_pages returned %d entries (expected %d)\n", n, NUM_PAGES);
 
@@ -143,7 +161,7 @@ int main(void) {
     for (int s = 0; s < NUM_STREAMS; s++)
         CUDA_CHECK(cudaStreamDestroy(streams[s]));
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

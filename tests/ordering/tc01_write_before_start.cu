@@ -9,6 +9,7 @@
 #define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
 #define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
 #define NUM_PAGES   16
 #define PAGE_SIZE   4096
@@ -43,6 +44,22 @@ static void set_query_pid(pid_t p) {
     char b[32];
     snprintf(b, sizeof(b), "%d\n", p);
     procfs_write(PROCFS_QUERY, b);
+}
+
+static void start_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_START, b);
+}
+
+static void stop_track(pid_t p) {
+    char b[32];
+    snprintf(b, sizeof(b), "%d\n", p);
+    procfs_write(PROCFS_STOP, b);
+}
+
+static void set_range_full(void) {
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 }
 
 static int read_pages(entry_t *out, int max) {
@@ -84,17 +101,18 @@ int main(void) {
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc01] pre-start writes complete\n");
 
-    procfs_write(PROCFS_START, "1\n");
+    start_track(pid);
     printf("[tc01] start_track issued\n");
 
     entry_t e[MAX_ENTRIES];
+    set_range_full();
     int n = read_pages(e, MAX_ENTRIES);
     printf("[tc01] dirty_pages returned %d entries (expected 0)\n", n);
     for (int i = 0; i < n && i < 8; i++)
         printf("[tc01]   entry %d: addr=0x%lx ts=%lu pid=%d\n",
                i, e[i].addr, e[i].ts, e[i].pid);
 
-    procfs_write(PROCFS_STOP, "1\n");
+    stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n != 0);
