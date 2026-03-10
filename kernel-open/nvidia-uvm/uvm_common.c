@@ -139,11 +139,16 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
         return NV_ERR_NO_MEMORY;
     }
 
-    void* ret = xa_store(&page_table_pointer->pages, page_number, info, GFP_ATOMIC);
+    void* ret = xa_cmpxchg(&page_table_pointer->pages, page_number, NULL, info, GFP_ATOMIC);
     if (xa_err(ret)) {
         printk(KERN_ERR "Failed to store dirty page info in xarray for pid %d\n", pid);
         kfree(info);
         return NV_ERR_NO_MEMORY;
+    }
+    if (ret != NULL) {
+         printk(KERN_INFO "Another thread already recorded dirty page info for page_number=0x%lx for pid %d, skipping\n", page_number, pid);
+        kfree(info);
+        return NV_OK;
     }
 
     printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu\n", page_number, timestamp);
