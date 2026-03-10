@@ -236,6 +236,7 @@ int main(void) {
     printf("[tc06]   torn    (BOTH halves — intermediate range leaked): %ld\n", rarg.torn);
     printf("[tc06]   error   (procfs read failed): %ld\n", rarg.error);
 
+    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
     procfs_write(PROCFS_STOP, "1\n");
     CUDA_CHECK(cudaFree(managed));
 

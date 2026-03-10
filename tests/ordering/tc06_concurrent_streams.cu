@@ -13,13 +13,11 @@
 /* 4 streams, each writing 64 pages with 256 threads/block = 65,536 threads in flight.
  * All 4 streams are dispatched without sync between them.
  *
- * Ordering check (intra-stream):
- *   Within a single CUDA stream, blocks execute in dispatch order: block 0
- *   before block 1, etc.  So within stream S, page[0] faults before page[63].
- *   The tracker must preserve this: for stream S's pages sorted by page-index,
- *   timestamps must be non-decreasing.
- *
- *   Cross-stream ordering is deliberately interleaved and is NOT checked. */
+ * Checks that all 256 pages across all streams are captured with no missing
+ * entries — i.e. the tracker handles concurrent fault streams without dropping
+ * records.  Timestamp ordering is deliberately not checked: CUDA stream
+ * ordering guarantees dispatch order, not fault-service order, so blocks from
+ * the same stream can fault out-of-order when multiple SMs are in flight. */
 
 #define NUM_STREAMS      4
 #define PAGES_PER_STREAM 64
@@ -116,14 +114,12 @@ int main(void) {
 
     /* for each stream, collect its entries sorted by page index (= address order)
      * and verify timestamps are non-decreasing */
-    int total_missing   = 0;
-    int total_inversions = 0;
+    int total_missing = 0;
 
     for (int s = 0; s < NUM_STREAMS; s++) {
         unsigned long stream_base = (unsigned long)managed + s * PAGES_PER_STREAM * PAGE_SIZE;
 
         /* gather entries belonging to this stream, indexed by page within stream */
-        unsigned long page_ts[PAGES_PER_STREAM];
         int page_found[PAGES_PER_STREAM];
         memset(page_found, 0, sizeof(page_found));
 
@@ -132,25 +128,16 @@ int main(void) {
             unsigned long off = e[i].addr - stream_base;
             if (off >= (unsigned long)PAGES_PER_STREAM * PAGE_SIZE) continue;
             int pg = (int)(off / PAGE_SIZE);
-            page_ts[pg]    = e[i].ts;
             page_found[pg] = 1;
         }
 
-        int missing = 0, inversions = 0;
-        unsigned long prev_ts = 0;
+        int missing = 0;
         for (int pg = 0; pg < PAGES_PER_STREAM; pg++) {
-            if (!page_found[pg]) { missing++; continue; }
-            if (page_ts[pg] < prev_ts) {
-                printf("[tc06]   stream %d page %d: ts=%lu < prev_ts=%lu (inversion)\n",
-                       s, pg, page_ts[pg], prev_ts);
-                inversions++;
-            }
-            prev_ts = page_ts[pg];
+            if (!page_found[pg]) missing++;
         }
-        printf("[tc06] stream %d: %d/%d pages, %d intra-stream ts inversions\n",
-               s, PAGES_PER_STREAM - missing, PAGES_PER_STREAM, inversions);
-        total_missing    += missing;
-        total_inversions += inversions;
+        printf("[tc06] stream %d: %d/%d pages captured\n",
+               s, PAGES_PER_STREAM - missing, PAGES_PER_STREAM);
+        total_missing += missing;
     }
 
     for (int s = 0; s < NUM_STREAMS; s++)
@@ -160,10 +147,9 @@ int main(void) {
     CUDA_CHECK(cudaFree(managed));
     free(e);
 
-    int failed = (n < 0 || total_missing > 0 || total_inversions > 0);
+    int failed = (n < 0 || total_missing > 0);
     printf("[tc06] %s\n", failed ? "FAIL" : "PASS");
-    if (n < 0)               printf("[tc06]   table not active\n");
-    if (total_missing > 0)   printf("[tc06]   %d pages missing\n", total_missing);
-    if (total_inversions > 0) printf("[tc06]   %d intra-stream timestamp inversions\n", total_inversions);
+    if (n < 0)             printf("[tc06]   table not active\n");
+    if (total_missing > 0) printf("[tc06]   %d pages missing\n", total_missing);
     return failed;
 }

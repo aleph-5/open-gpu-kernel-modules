@@ -185,6 +185,10 @@ NV_STATUS uvm_va_space_create(struct address_space *mapping, uvm_va_space_t **va
     if (!va_space)
         return NV_ERR_NO_MEMORY;
 
+    // EDIT BY ADITI KHANDELIA
+    va_space->owner_tgid = current->tgid;
+    // END OF EDIT
+
     if (flags & ~UVM_INIT_FLAGS_MASK) {
         uvm_kvfree(va_space);
         return NV_ERR_INVALID_ARGUMENT;
@@ -492,6 +496,12 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     // tear down. Once we're done, the bottom half will fail to find any
     // registered GPUs in the VA space, so those faults will be canceled.
     uvm_va_space_down_write(va_space);
+
+    // EDIT BY ADITI KHANDELIA
+    if (uvm_dirty_tracking_active_for_pid(va_space->owner_tgid)) {
+        uvm_dirty_page_table_destroy(va_space->owner_tgid);
+    }
+    // END OF EDIT
 
     uvm_processor_mask_copy(retained_gpus, &va_space->registered_gpus);
 

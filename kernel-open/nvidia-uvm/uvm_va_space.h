@@ -436,6 +436,10 @@ struct uvm_va_space_struct
     // Queue item for deferred f_ops->release() handling
     nv_kthread_q_item_t deferred_release_q_item;
 
+    // EDIT BY ADITI KHANDELIA
+    pid_t owner_tgid;
+    // END OF EDIT
+
 };
 
 NV_STATUS uvm_va_space_create(struct address_space *mapping, uvm_va_space_t **va_space_ptr, NvU64 flags);
