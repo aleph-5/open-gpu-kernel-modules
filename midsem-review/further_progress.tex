@@ -1,0 +1,67 @@
+\section*{Next Steps and Planned Progress}
+
+Multi-process isolation and range-based dirty tracking (the \texttt{dirty\_range} procfs interface) are fully implemented.
+The test suite covers table lifecycle, ordering guarantees, address range filtering, and
+fault-to-visibility latency. The remaining work is as follows.
+
+\subsection*{Extensions Still Pending}
+
+\begin{enumerate}
+    \item \textbf{CPU-side Dirty Tracking.}
+          The current implementation intercepts GPU write faults only. Extending tracking to
+          CPU-side writes requires integration with the \texttt{mmu\_notifier} invalidation
+          path so that CPU dirty pages are recorded in the same per-process table and exposed
+          through the existing procfs interface.
+
+    \item \textbf{Per-page Access Frequency Counters.}
+          The tracker currently operates under a first-write-wins policy: each page is recorded
+          once with its earliest observed write timestamp. Richer statistics, such as per-page
+          write counts and dirty page age, are needed to support informed migration and eviction
+          decisions by user-space tools. This requires extending \texttt{struct dirty\_page\_info}
+          with a counter field and updating the fault hook to increment it atomically.
+\end{enumerate}
+
+\subsection*{Testing and Performance Analysis}
+
+\begin{enumerate}
+    \item \textbf{Overhead Quantification.}
+          The per-fault overhead introduced by the tracking path (xarray lookup and conditional
+          insert under \texttt{GFP\_ATOMIC}) has not been formally benchmarked. Write fault
+          latency will be measured with and without tracking enabled across a range of workload
+          sizes to bound the cost.
+
+    \item \textbf{Memory Footprint Profiling.}
+          Under workloads with large dirty sets, the two-level xarray structure may incur
+          non-trivial memory overhead. The footprint of the tracking data structures will be
+          measured and compared against alternatives such as bitmaps.
+
+    \item \textbf{Concurrency Stress Testing.}
+          The existing concurrent-stream test (\texttt{tc06\_concurrent\_streams}) exercises
+          the xarray under parallel GPU faults. Additional stress tests under multi-process
+          workloads and simultaneous range-filter updates are needed to validate the spinlock
+          boundary.
+\end{enumerate}
+
+\subsection*{Optimisation}
+
+Based on profiling results, targeted optimisations will be applied. Likely candidates include
+batching xarray inserts to reduce per-fault locking overhead, and replacing the xarray with a
+bitmap representation for workloads where the dirty set density is high enough to justify the
+fixed memory cost.
+
+\subsection*{Further Deliverables}
+
+\begin{enumerate}
+    \item \textbf{Documentation.}
+          Comprehensive usage documentation covering the procfs interface, epoch semantics,
+          range filtering, and known limitations.
+
+    \item \textbf{Formal Benchmarking Report.}
+          Quantified results for fault latency overhead, memory footprint, and migration
+          throughput impact across representative workloads, with and without the tracker active.
+
+    \item \textbf{Command-line Interface.}
+          A user-facing CLI tool that wraps the procfs interface, providing commands to start
+          and stop tracking, query dirty pages for a given PID, set address range filters, and
+          display results in a human-readable format.
+\end{enumerate}

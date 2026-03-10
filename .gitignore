@@ -3,6 +3,7 @@
 *.o.cmd
 *.o.d
 _out/
+*.sw[po]
 
 cscope.*
 tags

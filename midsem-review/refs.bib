@@ -1,0 +1,224 @@
+% ============================================================
+% refs.bib — Bibliography for Milestone 2 Report
+% CHC-Based Safety Verification of Chiron Programs
+% ============================================================
+
+% ============================================================
+% Section 1: Constrained Horn Clauses as Verification IR
+% ============================================================
+
+@misc{pitt_horn_clauses_lecture,
+  author       = {{University of Pittsburgh}},
+  title        = {Propositional Logic: {H}orn Clauses},
+  howpublished = {Course Lecture Notes, CS 2740},
+  url          = {https://people.cs.pitt.edu/~milos/courses/cs2740/Lectures/class6.pdf},
+  note         = {Accessed: 2026}
+}
+
+@misc{utexas_axiomatic_semantics,
+  author       = {{University of Texas at Austin}},
+  title        = {Axiomatic Semantics and {H}oare Logic},
+  howpublished = {Course Lecture Notes, CS 345H},
+  url          = {https://www.cs.utexas.edu/~bornholt/courses/cs345h-24sp/lectures/5-axiomatic/},
+  note         = {Accessed: 2026}
+}
+
+@inproceedings{bjorner2015horn,
+  author    = {Nikolaj Bj{\o}rner and
+               Arie Gurfinkel and
+               Kenneth L. McMillan and
+               Andrey Rybalchenko},
+  title     = {Horn Clause Solvers for Program Verification},
+  booktitle = {Fields of Logic and Computation {II}: Essays Dedicated to {Y}uri
+               {G}urevich on the Occasion of His 75th Birthday},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9300},
+  pages     = {24--51},
+  publisher = {Springer},
+  year      = {2015},
+  url       = {https://www.microsoft.com/en-us/research/wp-content/uploads/2016/02/nbjorner-yurifest.pdf},
+  doi       = {10.1007/978-3-319-23534-9_2}
+}
+
+@inproceedings{rybalchenko2011constraint,
+  author    = {Andrey Rybalchenko},
+  title     = {Constraint Solving for Program Verification: Power and Limitations},
+  booktitle = {Verification, Model Checking, and Abstract Interpretation ({VMCAI})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6538},
+  pages     = {1--16},
+  publisher = {Springer},
+  year      = {2011},
+  url       = {https://link.springer.com/chapter/10.1007/978-3-642-18275-4_1}
+}
+
+@misc{gurfinkel_chc_lecture,
+  author       = {Arie Gurfinkel},
+  title        = {Constrained Horn Clauses ({CHC})},
+  howpublished = {ECE 750T Lecture Notes, University of Waterloo},
+  year         = {2018},
+  url          = {https://ece.uwaterloo.ca/~agurfink/ece750t29f18/assets/pdf/07_CHC_LIA.pdf},
+  note         = {Accessed: 2026}
+}
+
+@inproceedings{gurfinkel2015seahorn,
+  author    = {Arie Gurfinkel and
+               Temesghen Kahsai and
+               Anvesh Komuravelli and
+               Jorge A. Navas},
+  title     = {The {SeaHorn} Verification Framework},
+  booktitle = {Computer Aided Verification ({CAV})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {9206},
+  pages     = {343--361},
+  publisher = {Springer},
+  year      = {2015},
+  url       = {https://link.springer.com/chapter/10.1007/978-3-319-21690-4_20},
+  doi       = {10.1007/978-3-319-21690-4_20}
+}
+
+% ============================================================
+% Section 2: IC3 / PDR
+% ============================================================
+
+@inproceedings{bradley2011sat,
+  author    = {Aaron R. Bradley},
+  title     = {{SAT}-Based Model Checking without Unrolling},
+  booktitle = {Verification, Model Checking, and Abstract Interpretation ({VMCAI})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6538},
+  pages     = {70--87},
+  publisher = {Springer},
+  year      = {2011},
+  doi       = {10.1007/978-3-642-18275-4_7}
+}
+
+@inproceedings{een2011efficient,
+  author    = {Niklas E{\'{e}}n and Alan Mishchenko and Robert K. Brayton},
+  title     = {Efficient Implementation of Property Directed Reachability},
+  booktitle = {Formal Methods in Computer-Aided Design ({FMCAD})},
+  pages     = {125--134},
+  publisher = {{IEEE}},
+  year      = {2011}
+}
+
+% ============================================================
+% Section 3: Z3, muZ Fixed-Point Engine, and SPACER
+% ============================================================
+
+@misc{stanford_smt_lecture,
+  author       = {{Stanford University}},
+  title        = {Satisfiability Modulo Theories},
+  howpublished = {Course Lecture Notes, CS 357},
+  url          = {https://web.stanford.edu/class/cs357/lecture10.pdf},
+  note         = {Accessed: 2026}
+}
+
+@inproceedings{fixed-point-engine,
+  author    = {Kry{\v{s}}tof Hoder and
+               Nikolaj Bj{\o}rner and
+               Leonardo de Moura},
+  editor    = {Ganesh Gopalakrishnan and Shaz Qadeer},
+  title     = {{\(\mu\)Z}: An Efficient Engine for Fixed Points with Constraints},
+  booktitle = {Computer Aided Verification ({CAV})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {6806},
+  pages     = {457--462},
+  publisher = {Springer Berlin Heidelberg},
+  address   = {Berlin, Heidelberg},
+  year      = {2011},
+  doi       = {10.1007/978-3-642-22110-1_36},
+  isbn      = {978-3-642-22110-1}
+}
+
+@inproceedings{komuravelli2014spacer,
+  author    = {Anvesh Komuravelli and
+               Arie Gurfinkel and
+               Sagar Chaki},
+  title     = {{SMT}-Based Model Checking for Recursive Programs},
+  booktitle = {Computer Aided Verification ({CAV})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {8559},
+  pages     = {17--34},
+  publisher = {Springer},
+  year      = {2014},
+  doi       = {10.1007/978-3-319-08867-9_2}
+}
+
+@inproceedings{de2008z3,
+  author    = {Leonardo de Moura and Nikolaj Bj{\o}rner},
+  title     = {{Z3}: An Efficient {SMT} Solver},
+  booktitle = {Tools and Algorithms for the Construction and Analysis of Systems ({TACAS})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {4963},
+  pages     = {337--340},
+  publisher = {Springer},
+  year      = {2008},
+  doi       = {10.1007/978-3-540-78800-3_24}
+}
+
+@misc{z3pyfixpoint,
+  author       = {Pony, Eric},
+  title        = {{Z3Py} Fixedpoints Tutorial},
+  howpublished = {Online Tutorial},
+  year         = {2014},
+  url          = {https://ericpony.github.io/z3py-tutorial/fixpoint-examples.htm},
+  note         = {Accessed: 2026-02-14}
+}
+
+@misc{z3guide_spacer,
+  author       = {{Microsoft Research}},
+  title        = {Generalized {PDR} with {SPACER}},
+  howpublished = {Online Z3 Guide},
+  year         = {2024},
+  url          = {https://microsoft.github.io/z3guide/docs/fixedpoints/engineforpdr/},
+  note         = {Accessed: 2026}
+}
+
+% ============================================================
+% Section 4: Abstract Interpretation and Invariant Inference
+% ============================================================
+
+@inproceedings{cousot1977abstract,
+  author    = {Patrick Cousot and Radhia Cousot},
+  title     = {Abstract Interpretation: A Unified Lattice Model for Static Analysis
+               of Programs by Construction or Approximation of Fixpoints},
+  booktitle = {Principles of Programming Languages ({POPL})},
+  pages     = {238--252},
+  publisher = {{ACM}},
+  year      = {1977},
+  doi       = {10.1145/512950.512973}
+}
+
+@inproceedings{mcmillan2006lazy,
+  author    = {Kenneth L. McMillan},
+  title     = {Lazy Abstraction with Interpolants},
+  booktitle = {Computer Aided Verification ({CAV})},
+  series    = {Lecture Notes in Computer Science},
+  volume    = {4144},
+  pages     = {123--136},
+  publisher = {Springer},
+  year      = {2006},
+  doi       = {10.1007/11817963_14}
+}
+
+% ============================================================
+% Section 5: Chiron Framework and Turtle Graphics
+% ============================================================
+
+@misc{antlr4,
+  author       = {Terence Parr},
+  title        = {{ANTLR4}: Another Tool for Language Recognition},
+  howpublished = {Software Framework},
+  year         = {2013},
+  url          = {https://www.antlr.org/},
+  note         = {Version 4.13.2 used in this project}
+}
+
+@misc{python_turtle,
+  author       = {{Python Software Foundation}},
+  title        = {turtle --- Turtle Graphics},
+  howpublished = {Python Standard Library Documentation},
+  url          = {https://docs.python.org/3/library/turtle.html},
+  note         = {Accessed: 2026}
+}

@@ -1,0 +1,28 @@
+\section*{Project Overview}
+
+Iterative pre-copy live migration transfers memory pages from a running process
+to a destination host while the process continues to execute, repeating the
+transfer for pages that were dirtied during the previous round until the
+remaining working set is small enough to complete migration with a brief final
+pause.
+The efficiency of this scheme depends entirely on the ability to identify,
+at the end of each round, \emph{exactly} which pages were written.
+For CPU memory, the Linux kernel provides this capability through soft-dirty
+bits embedded in page-table entries, readable via \texttt{/proc/\textit{PID}/pagemap}.
+No analogous mechanism exists for GPU-managed memory.
+NVIDIA's Unified Virtual Memory (UVM) subsystem, which underpins \texttt{cudaMallocManaged}
+and handles demand-paging between host and device, exposes no interface for
+querying which pages a process has modified. Consequently, any migration or checkpointing system must conservatively copy the
+\emph{entire} GPU memory footprint on every iteration, rendering iterative
+pre-copy migration of large GPU workloads impractical.
+
+This project addresses that gap by implementing \textbf{per-process dirty page
+tracking} directly within the open-source NVIDIA UVM kernel module.
+UVM already intercepts every GPU page fault to manage demand-paging; we augment
+the write-fault servicing path to record each written page in an in-kernel
+data structure, without introducing any additional hardware overhead.
+A \texttt{procfs}-based interface allows a privileged migration daemon to
+start and stop tracking epochs and to retrieve the complete set of pages written
+by a given process, with \textbf{page-level granularity} and a per-page
+\textbf{nanosecond-resolution timestamp} suitable for ordering events across
+migration rounds.

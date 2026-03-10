@@ -1,0 +1,100 @@
+\section*{Current Progress}
+\subsection*{Literature Review, Technical Familiarization and other Preliminaries}
+
+\subsection*{Implementation of Dirty Access Tracking in UVM Driver}
+
+\paragraph{Workflow.}
+A tracking epoch begins when a privileged user-space tool writes to
+\texttt{dirty\_pids\_start\_track}.
+This initialises a fresh per-process table and immediately invalidates all
+current GPU page-table entries by unmapping them, so that every subsequent GPU
+access generates a fresh page fault.
+Each write fault is intercepted in the driver's fault-servicing path, which
+records the faulting page in the table along with a nanosecond-resolution
+timestamp before re-establishing the mapping and replaying the faulting
+instruction.
+At any point during the epoch the tool can read \texttt{dirty\_pages} to obtain
+the accumulated set of written pages; reads are non-destructive, so the table
+is not consumed by the query.
+The epoch ends when the tool writes to \texttt{dirty\_pids\_stop\_track},
+which frees all recorded state. Re-starting tracking destroys any existing
+table before creating a fresh one, cleanly beginning a new epoch.
+
+\paragraph{Data Structures.}
+The tracking state is organised as a two-level structure defined in
+\texttt{uvm\_common.h}.
+
+\begin{enumerate}
+    \item \texttt{struct dirty\_page\_info} - a per-page record holding the
+          page number, the \texttt{ktime\_get\_ns()} timestamp of the first
+          observed write fault, and the PID of the faulting process.
+    \item \texttt{struct uvm\_dirty\_page\_table} - a per-process container
+          holding an \texttt{xarray} that maps page numbers to
+          \texttt{dirty\_page\_info} pointers.
+    \item A global \texttt{xarray} (\texttt{pid\_to\_page\_table}) maps each
+          tracked process's \texttt{tgid} to its \texttt{uvm\_dirty\_page\_table}.
+\end{enumerate}
+
+This two-level design provides natural per-process isolation. Entries are recorded under a
+\emph{first-write-wins} policy: an existing entry is never overwritten, so the
+stored timestamp always reflects the earliest observed write to that page within
+the current epoch. The faults may be serviced by different CPU-side driver threads, 
+thus the timestamp may not be strictly monotonic, depending upon the driver-side service thread
+recording the same.
+
+\paragraph{APIs Exposed.}
+User-space interacts with the tracker exclusively through five
+\texttt{procfs} entries created under \texttt{/proc/driver/nvidia-uvm/}:
+
+\begin{enumerate}
+    \item \texttt{dirty\_pids\_start\_track} (write) - initialises (or
+          re-initialises) the tracking table for \texttt{current->tgid} and
+          triggers GPU-mapping invalidation to start a new epoch.
+    \item \texttt{dirty\_pids\_stop\_track} (write) - destroys the table for
+          \texttt{current->tgid}, freeing all recorded entries.
+    \item \texttt{dirty\_pid\_to\_query} (write) - sets the PID whose table
+          is consulted on subsequent \texttt{dirty\_pages} reads, decoupling
+          the querying process from the tracked process.
+    \item \texttt{dirty\_pages} (read) - iterates the selected process's
+          table and emits one line per recorded page in the format
+          \texttt{0x\textit{addr}\ \textit{timestamp\_ns}\ \textit{pid}}.
+          Reads are \emph{non-destructive}: entries remain in the table and
+          can be queried repeatedly within the same epoch.
+    \item \texttt{dirty\_range} (write) - accepts a pair of hexadecimal
+          addresses \texttt{0x\textit{start}\ 0x\textit{end}} (end exclusive)
+          to restrict subsequent \texttt{dirty\_pages} reads to a specific
+          virtual address window. The range is protected by a spinlock to
+          allow concurrent updates safely. An inverted or zero-length range
+          produces an empty result rather than undefined behaviour.
+\end{enumerate}
+
+\paragraph{Internal Functions and Implementation Sites.}
+The implementation is spread across several driver files, each responsible for
+a distinct concern:
+
+\begin{enumerate}
+    \item \texttt{uvm\_common.c} - the primary implementation file.
+          Contains \texttt{uvm\_dirty\_page\_table\_init} /
+          \texttt{uvm\_dirty\_page\_table\_destroy} (table lifecycle),
+          \texttt{uvm\_dirty\_page\_table\_record} (fault recording, using
+          \texttt{GFP\_ATOMIC} as it executes in a non-sleepable context),
+          \texttt{uvm\_dirty\_page\_table\_lookup}, and the full
+          \texttt{procfs} handler implementations including
+          \texttt{uvm\_dirty\_procfs\_init}.
+    \item \texttt{uvm\_gpu\_replayable\_faults.c} - the write-fault hook.
+          After standard fault servicing, checks
+          \texttt{uvm\_dirty\_tracking\_active\_for\_pid(va\_block->creator\_pid)}
+          and calls \texttt{uvm\_dirty\_page\_table\_record} for
+          \texttt{UVM\_FAULT\_ACCESS\_TYPE\_WRITE} faults.
+    \item \texttt{uvm\_va\_space.c} - implements
+          \texttt{uvm\_dirty\_invalidate\_all\_gpu\_mappings}, which walks all
+          live VA spaces and blocks to unmap GPU PTEs at epoch start. Exposes
+          \texttt{uvm\_va\_space\_dirty\_init} to register this function via
+          the \texttt{uvm\_dirty\_invalidate\_fn} function pointer at module
+          load.
+    \item \texttt{uvm.c} - top-level integration; calls
+          \texttt{uvm\_dirty\_procfs\_init} and
+          \texttt{uvm\_va\_space\_dirty\_init} during module initialisation.
+\end{enumerate}
+
+\subsection*{Initial Performance Evaluation}

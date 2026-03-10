@@ -1,0 +1,32 @@
+\section*{Source Code}
+
+\subsection*{Development Environment}
+All development and testing is carried out on a dedicated virtual machine named \texttt{dirtyuvm}, running a custom kernel with the modified NVIDIA UVM driver loaded as a kernel module.
+
+\subsection*{Repository}
+The full source code is hosted at:
+\begin{center}
+    \url{https://github.com/aleph-5/open-gpu-kernel-modules}
+\end{center}
+This is a fork of NVIDIA's open-source GPU kernel modules, with our modifications applied on top.
+
+\subsection*{Modified Driver Files}
+All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}. The files containing functionality added or significantly modified by us are:
+
+\begin{enumerate}
+    \item \texttt{uvm\_common.h} / \texttt{uvm\_common.c} - The primary location of our implementation. Defines \texttt{struct dirty\_page\_info} (page number, timestamp, PID) and \texttt{struct uvm\_dirty\_page\_table} (an \texttt{xarray}-based per-process table). Implements the core API: table initialisation and teardown, fault recording, and page lookup. Also declares \texttt{uvm\_dirty\_procfs\_init} for the \texttt{procfs} interface.
+    \item \texttt{uvm\_va\_block.c} - Hooked to invoke the dirty tracking record function when a write fault is serviced on a VA block.
+    \item \texttt{uvm\_gpu\_replayable\_faults.c} - Modified to record dirty page events when GPU write faults are replayed.
+    \item \texttt{uvm\_va\_space.c} / \texttt{uvm\_va\_space.h} - Extended to register the dirty-page GPU-unmap invalidation callback (\texttt{uvm\_va\_space\_dirty\_init}) and manage per-process tracking table lifetime alongside VA space creation and destruction.
+    \item \texttt{uvm.c} - Top-level integration point; initialises the procfs dirty tracking interface at module load.
+\end{enumerate}
+
+\subsection*{Tests}
+User-space tests are located in the \texttt{tests/} directory at the repository root, organised into the following subdirectories:
+
+\begin{enumerate}
+    \item \texttt{address\_range\_filtering} - Tests for range-based selective dirty tracking.
+    \item \texttt{ordering} - Tests verifying the ordering guarantees of fault recording.
+    \item \texttt{table\_lifecycle} - Tests for correct initialisation and teardown of tracking tables across process lifecycles.
+    \item \texttt{latency} - Benchmarks measuring per-fault overhead introduced by the tracking mechanism.
+\end{enumerate}

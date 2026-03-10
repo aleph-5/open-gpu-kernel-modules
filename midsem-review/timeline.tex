@@ -1,0 +1,52 @@
+\section*{Milestones}
+
+\subsection*{Milestone 1 - Midsem Review \hfill \textit{(4 weeks)}} 
+
+    \begin{enumerate}
+        \item \textbf{Literature Review, Technical Familiarization and other Preliminaries} \hfill \textit{(1 week)}
+        \begin{enumerate}
+            \item Review existing technical documentation and architectural specifications regarding UVM.
+            \item Conduct a code review of the UVM driver and perform preliminary API experimentation.
+        \end{enumerate}
+    
+        \item \textbf{Implementation of Dirty Access Tracking in UVM Driver}  \hfill \textit{(2 weeks)}
+        \begin{enumerate}
+            \item Add instrumentation and logging to observe runtime behavior, including tracking page faults, permission transitions, migration events, and residency changes for debugging and analysis.
+            \item Implement the core dirty access tracking mechanism, including data structures for tracking dirty pages, and the logic to update these structures on write faults.
+            \item Develop a \texttt{procfs}-based interface to allow user-space tools to query the set of dirty pages for a given process, including timestamps for each page.
+        \end{enumerate}
+        
+        \item \textbf{Initial Performance Evaluation} \hfill \textit{(1 week)}
+        \begin{enumerate}
+            \item Evaluate the performance of the modified driver on small workloads, measuring metrics such as page fault latency, migration throughput, and overall application runtime.
+            \item Identify and address any significant performance bottlenecks or correctness issues in the implementation.
+        \end{enumerate}
+    \end{enumerate}
+
+\subsection*{Milestone 2 - Extensions, Testing and Optimisations \hfill \textit{(4 weeks)}}
+    \begin{enumerate}
+        \item \textbf{Extension of Functionality} \hfill \textit{(2 week)}
+        \begin{enumerate}
+            \item Extend the tracking mechanism to support additional features such as multiple concurrent processes, concurrent tracking on
+            CPU and GPU side, and range-based dirty tracking to allow selective monitoring of specific virtual memory regions.
+            \item Extend the \texttt{procfs} interface to expose richer statistics, including per-page access 
+            frequency counters and dirty page age, to enable more informed migration and eviction decisions by user-space tools.
+        \end{enumerate}
+        \item \textbf{Testing and Analysis of Tracking Mechanism} \hfill \textit{(1 week)}
+        \begin{enumerate}
+            \item Test critical issues pertaining to concurrency and performance that arise under multi-process workloads, including correctness of dirty page tracking under concurrent write faults and race conditions in shared data structures.
+            \item Quantify overhead introduced by dirty tracking, measuring additional latency per write fault due to metadata updates, and memory footprint of tracking data structures such as counters, hash tables, and bitmaps.
+            \item Profile driver performance across diverse workloads with and without dirty tracking enabled, for metrics such as page fault latency, migration throughput, and overall application runtime.
+        \end{enumerate}
+        \item \textbf{Optimisation of Tracking Mechanism} \hfill \textit{(1 week)}
+        \begin{enumerate}
+            \item Based on the analysis, identify and implement optimizations to reduce overhead, such as batching updates to tracking data structures, using more efficient data structures (e.g., bitmaps instead of hash tables), and optimizing critical paths in the tracking logic.
+        \end{enumerate}
+    \end{enumerate}
+
+\subsection*{Milestone 3 - Final Deliverables and Integration \hfill \textit{(2 weeks)}}
+    \begin{enumerate}
+        \item Prepare comprehensive documentation for the tool, including usage guidelines and performance considerations.
+        \item Produce formal benchmarking results quantifying the tracker's performance impact across various scenarios.
+        \item Implement user-facing configurability for the tracker via a command-line interface (CLI).
+    \end{enumerate}
