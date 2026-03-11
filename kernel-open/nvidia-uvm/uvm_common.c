@@ -42,13 +42,9 @@ void (*uvm_dirty_invalidate_fn)(void) = NULL;
 // EDIT BY ADITI KHANDELIA
 static DEFINE_XARRAY(pid_to_page_table_xa);
 static struct xarray *pid_to_page_table = &pid_to_page_table_xa;
+static DEFINE_MUTEX(pid_to_page_table_lock);
 
-bool uvm_dirty_tracking_active_for_pid(pid_t pid) {
-    struct uvm_dirty_page_table* page_table = uvm_dirty_page_table_by_pid(pid);
-    return page_table != NULL;
-}
-
-struct uvm_dirty_page_table* uvm_dirty_page_table_by_pid(pid_t pid) {
+static struct uvm_dirty_page_table* uvm_dirty_page_table_by_pid(pid_t pid) {
     struct uvm_dirty_page_table* page_table = xa_load(pid_to_page_table, pid);
     if (page_table == NULL) {
         printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
@@ -57,14 +53,24 @@ struct uvm_dirty_page_table* uvm_dirty_page_table_by_pid(pid_t pid) {
     return page_table;
 }
 
+bool uvm_dirty_tracking_active_for_pid(pid_t pid) {
+    mutex_lock(&pid_to_page_table_lock);
+    struct uvm_dirty_page_table* page_table = uvm_dirty_page_table_by_pid(pid);
+    mutex_unlock(&pid_to_page_table_lock);
+    return page_table != NULL;
+
+}
+
 NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
+    mutex_lock(&pid_to_page_table_lock);
 
     struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
 
     if (page_table_pointer != NULL) {
-        NV_STATUS destruction_status = uvm_dirty_page_table_destroy(pid);
+        NV_STATUS destruction_status = uvm_dirty_page_table_destroy(pid, true);
         if (destruction_status != NV_OK) {
             printk(KERN_ERR "Failed to destroy existing dirty page table for pid %d\n", pid);
+            mutex_unlock(&pid_to_page_table_lock);
             return NV_ERR_GENERIC;
         }
         printk(KERN_WARNING "Dirty page table was already initialized, reinitializing it for pid %d\n", pid);
@@ -73,6 +79,7 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
     page_table_pointer = kmalloc(sizeof(struct uvm_dirty_page_table), GFP_KERNEL);
     if (page_table_pointer == NULL) {
         printk(KERN_ERR "Failed to allocate memory for dirty page table for pid %d\n", pid);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_NO_MEMORY;
     }
     xa_init(&page_table_pointer->pages);
@@ -81,18 +88,24 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
     if (xa_err(ret)) {
         printk(KERN_ERR "Failed to store dirty page table in xarray for pid %d\n", pid);
         kfree(page_table_pointer);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_NO_MEMORY;
     }
 
     printk(KERN_INFO "Dirty page table initialized for pid %d\n", pid);
+
+    mutex_unlock(&pid_to_page_table_lock);
     return NV_OK;
 }
 
-NV_STATUS uvm_dirty_page_table_destroy(pid_t pid) {
+NV_STATUS uvm_dirty_page_table_destroy(pid_t pid, bool locked) {
+    if(!locked) mutex_lock(&pid_to_page_table_lock);
+
     struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
 
     if (page_table_pointer == NULL) {
         printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
+        if (!locked) mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_GENERIC;
     }
 
@@ -102,26 +115,30 @@ NV_STATUS uvm_dirty_page_table_destroy(pid_t pid) {
         kfree(info);
     }
     xa_destroy(&page_table_pointer->pages);
-    kfree(page_table_pointer);
     xa_erase(pid_to_page_table, pid);
+    kfree(page_table_pointer);
     printk(KERN_INFO "Dirty page table destroyed for pid %d\n", pid);
 
+    if(!locked) mutex_unlock(&pid_to_page_table_lock);
     return NV_OK;
 }
 
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp,
     pid_t pid) { // (EDIT BY VIDHI JAIN)
+    mutex_lock(&pid_to_page_table_lock);
 
-    struct dirty_page_info* existing_info = uvm_dirty_page_table_lookup(page_number, pid);
+    struct dirty_page_info* existing_info = uvm_dirty_page_table_lookup(page_number, pid, true);
     if (existing_info != NULL) {
         printk(KERN_INFO "Dirty page info already exists for page_number=0x%lx for pid %d, skipping\n", page_number, pid);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_OK;
     }
 
     struct dirty_page_info* info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
     if (info == NULL) {
         printk(KERN_ERR "Failed to allocate memory for dirty page info\n");
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_NO_MEMORY;
     }
 
@@ -136,6 +153,7 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     if (page_table_pointer == NULL) {
         printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
         kfree(info);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_NO_MEMORY;
     }
 
@@ -143,34 +161,45 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     if (xa_err(ret)) {
         printk(KERN_ERR "Failed to store dirty page info in xarray for pid %d\n", pid);
         kfree(info);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_ERR_NO_MEMORY;
     }
     if (ret != NULL) {
-         printk(KERN_INFO "Another thread already recorded dirty page info for page_number=0x%lx for pid %d, skipping\n", page_number, pid);
+        printk(KERN_INFO "Another thread already recorded dirty page info for page_number=0x%lx for pid %d, skipping\n", page_number, pid);
         kfree(info);
+        mutex_unlock(&pid_to_page_table_lock);
         return NV_OK;
     }
 
     printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu\n", page_number, timestamp);
+
+    mutex_unlock(&pid_to_page_table_lock);
     return NV_OK;
 }
 
 struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, 
-    pid_t pid) {
+    pid_t pid,
+    bool locked) {
+    if (!locked) mutex_lock(&pid_to_page_table_lock);
+
     struct uvm_dirty_page_table* page_table_pointer = uvm_dirty_page_table_by_pid(pid);
     if (page_table_pointer == NULL) {
         printk(KERN_ERR "Dirty page table not initialized for pid %d\n", pid);
+        if (!locked) mutex_unlock(&pid_to_page_table_lock);
         return NULL;
     }
 
     struct dirty_page_info *info = xa_load(&page_table_pointer->pages, page_number);
     if (info == NULL) {
         printk(KERN_INFO "No dirty page info found for page_number=0x%lx for pid %d\n", page_number, pid);
+        if (!locked) mutex_unlock(&pid_to_page_table_lock);
         return NULL;    
     }
 
     printk(KERN_INFO "Found dirty page info: page_number=0x%lx, timestamp=%lu for pid %d\n",
            info->page_number, info->timestamp, info->pid);
+
+    if (!locked) mutex_unlock(&pid_to_page_table_lock);
     return info;
 }
 
@@ -208,6 +237,8 @@ static pid_t dirty_query_pid = 0;
 // END OF EDIT
 static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 {
+    mutex_lock(&pid_to_page_table_lock);
+
     unsigned long index;
     struct dirty_page_info *info;
 
@@ -215,6 +246,7 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 
     if (page_table_pointer == NULL) {
         seq_printf(s, "# dirty tracking not active for pid %d\n", dirty_query_pid);
+        mutex_unlock(&pid_to_page_table_lock);
         return 0;
     }
 
@@ -231,6 +263,7 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
     if (dirty_query_end <= dirty_query_start) {
         seq_printf(s, "# invalid range: start 0x%lx is greater than end 0x%lx\n",
                    dirty_query_start, dirty_query_end);
+        mutex_unlock(&pid_to_page_table_lock);
         return 0;
     }
     // END OF EDIT
@@ -251,6 +284,7 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 
     // END OF EDIT
 
+    mutex_unlock(&pid_to_page_table_lock);
     return 0;
 }
 
@@ -316,7 +350,7 @@ static ssize_t dirty_pids_stop_write(struct file* file,
         return -EINVAL;
     }
 
-    uvm_dirty_page_table_destroy(pid);
+    uvm_dirty_page_table_destroy(pid, false);
     return count;
 }
 

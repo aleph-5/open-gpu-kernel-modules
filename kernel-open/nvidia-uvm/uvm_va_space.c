@@ -497,12 +497,6 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     // registered GPUs in the VA space, so those faults will be canceled.
     uvm_va_space_down_write(va_space);
 
-    // EDIT BY ADITI KHANDELIA
-    if (uvm_dirty_tracking_active_for_pid(va_space->owner_tgid)) {
-        uvm_dirty_page_table_destroy(va_space->owner_tgid);
-    }
-    // END OF EDIT
-
     uvm_processor_mask_copy(retained_gpus, &va_space->registered_gpus);
 
     bitmap_copy(va_space->enabled_peers_teardown, va_space->enabled_peers, UVM_MAX_UNIQUE_GPU_PAIRS);
@@ -551,6 +545,12 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     // block_deferred_accessed_by() work items.
 
     nv_kthread_q_flush(&g_uvm_global.global_q);
+
+    // EDIT BY ADITI KHANDELIA
+    if (uvm_dirty_tracking_active_for_pid(va_space->owner_tgid)) {
+        uvm_dirty_page_table_destroy(va_space->owner_tgid, false);
+    }
+    // END OF EDIT
 
     for_each_gpu_in_mask(gpu, retained_gpus) {
         // Free the processor masks allocated in uvm_va_space_register_gpu().
