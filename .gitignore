@@ -37,3 +37,4 @@ tests/ordering/tc06_concurrent_streams
 tests/ordering/tc07_sentinel_flood
 tests/ordering/tc08_flood_between_queries
 tests/generic/test_dirty_tracking_suite
+tests/performance_testing/perf_dirty_tracking
