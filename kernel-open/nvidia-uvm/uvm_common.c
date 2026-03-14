@@ -211,8 +211,12 @@ static ssize_t dirty_range_write(struct file *file,
 {
     char kbuf[64];
 
-    if(copy_from_user(kbuf, buf, min(count, sizeof(kbuf))))
+    // EDIT BY SANKALP MITTAL
+    size_t to_copy = min(count, sizeof(kbuf) - 1); // Safety in case of large input
+    if(copy_from_user(kbuf, buf, to_copy))
         return -EFAULT;
+    kbuf[to_copy] = '\0';
+    // END OF EDIT
 
     spin_lock(&dirty_query_lock);
     sscanf(kbuf, "%lx %lx", &dirty_query_start, &dirty_query_end);
@@ -365,8 +369,12 @@ static ssize_t pid_to_query_for_dirty_tracking(struct file* file,
 
     char kbuf[32];
 
-    if (copy_from_user(kbuf, buf, min(count, sizeof(kbuf))))
+    // EDIT BY SANKALP MITTAL
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy))
         return -EFAULT;
+    kbuf[to_copy] = '\0';
+    // END OF EDIT
 
     pid_t pid;
     sscanf(kbuf, "%d", &pid);
