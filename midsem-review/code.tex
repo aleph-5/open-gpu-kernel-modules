@@ -1,7 +1,11 @@
 \section*{Source Code}
 
 \subsection*{Development Environment}
-All development and testing is carried out on a dedicated virtual machine named \texttt{dirtyuvm}, running a custom kernel with the modified NVIDIA UVM driver loaded as a kernel module.
+Development and testing are conducted on a dedicated virtual machine (\texttt{dirtyuvm}) running:
+\begin{itemize}
+    \item Linux kernel version 6.8 (custom build)
+    \item Modified NVIDIA UVM driver version 580.65.06 (loaded as a kernel module)
+\end{itemize}
 
 \subsection*{Repository}
 The full source code is hosted at:
@@ -25,6 +29,7 @@ All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}. The file
 User-space tests are located in the \texttt{tests/} directory at the repository root, organised into the following subdirectories:
 
 \begin{enumerate}
+    \item \texttt{generic} - Basic functionality tests for the dirty tracking API, like recording and querying dirty pages.
     \item \texttt{address\_range\_filtering} - Tests for range-based selective dirty tracking.
     \item \texttt{ordering} - Tests verifying the ordering guarantees of fault recording.
     \item \texttt{table\_lifecycle} - Tests for correct initialisation and teardown of tracking tables across process lifecycles.

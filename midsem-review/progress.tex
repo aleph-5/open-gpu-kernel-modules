@@ -1,5 +1,7 @@
 \section*{Current Progress}
-\subsection*{Literature Review, Technical Familiarization and other Preliminaries}
+
+% \subsection*{Literature Review, Technical Familiarization and other Preliminaries}
+
 
 \subsection*{Implementation of Dirty Access Tracking in UVM Driver}
 
@@ -13,7 +15,8 @@ Each write fault is intercepted in the driver's fault-servicing path, which
 records the faulting page in the table along with a nanosecond-resolution
 timestamp before re-establishing the mapping and replaying the faulting
 instruction.
-At any point during the epoch the tool can read \texttt{dirty\_pages} to obtain
+At any point during the epoch the tool can read \texttt{dirty\_pages} 
+(provided that the PID has been set using \texttt{dirty\_pid\_to\_query}) to obtain
 the accumulated set of written pages; reads are non-destructive, so the table
 is not consumed by the query.
 The epoch ends when the tool writes to \texttt{dirty\_pids\_stop\_track},
@@ -81,11 +84,12 @@ a distinct concern:
           \texttt{uvm\_dirty\_page\_table\_lookup}, and the full
           \texttt{procfs} handler implementations including
           \texttt{uvm\_dirty\_procfs\_init}.
-    \item \texttt{uvm\_gpu\_replayable\_faults.c} - the write-fault hook.
+    \item {\raggedright
+          \texttt{uvm\_gpu\_replayable\_faults.c} - the write-fault hook.
           After standard fault servicing, checks
-          \texttt{uvm\_dirty\_tracking\_active\_for\_pid(va\_block->creator\_pid)}
+          \texttt{uvm\_dirty\_tracking\_active\_for\_pid\allowbreak(va\_block->creator\_pid)}
           and calls \texttt{uvm\_dirty\_page\_table\_record} for
-          \texttt{UVM\_FAULT\_ACCESS\_TYPE\_WRITE} faults.
+          \texttt{UVM\_FAULT\_ACCESS\_TYPE\_WRITE} faults.\par}
     \item \texttt{uvm\_va\_space.c} - implements
           \texttt{uvm\_dirty\_invalidate\_all\_gpu\_mappings}, which walks all
           live VA spaces and blocks to unmap GPU PTEs at epoch start. Exposes
@@ -98,3 +102,95 @@ a distinct concern:
 \end{enumerate}
 
 \subsection*{Initial Performance Evaluation}
+
+At this stage, evaluation is driven by the CUDA tests under \texttt{tests/}.
+The suites are intended to cover five broad questions:
+
+\paragraph{1. Generic sanity checks.}
+The \texttt{generic} suite is the basic end-to-end test for dirty-page
+tracking: it GPU writes are recorded, read-only accesses are not,
+and that reset, disable, PID reporting, and range filtering behave as expected.
+
+\paragraph{2. Table lifecycle.}
+The \texttt{table\_lifecycle} suite checks whether starting, stopping, and
+restarting tracking creates a clean epoch each time without stale entries
+leaking across resets.
+
+\paragraph{3. Ordering and concurrency.}
+The \texttt{ordering} suite checks whether timestamps and page membership stay
+reasonable when writes arrive across epochs, across repeated queries, and under
+high-concurrency GPU execution.
+
+\paragraph{4. Address-range filtering.}
+The \texttt{address\_range\_filtering} suite checks whether
+\texttt{dirty\_range} correctly limits query results and whether query-time
+range filtering behaves correctly across valid and invalid ranges.
+
+\paragraph{5. Fault-to-visibility latency.}
+The \texttt{latency} suite checks whether newly dirtied pages become visible
+soon after kernel completion and whether recorded timestamps preserve coarse
+temporal separation between two write phases.
+
+\paragraph{Observations}
+The tests were rerun as root, and the current implementation passed every test
+that is still present in the repository. The aggregate result was
+\textbf{32/32 passed}: \texttt{table\_lifecycle} 5/5,
+\texttt{ordering} 8/8, \texttt{address\_range\_filtering} 5/5,
+\texttt{latency} 2/2, and the \texttt{generic} suite 12/12. The per-test
+runners for the first four suites report runtimes between 1.94\,s and 2.07\,s.
+
+\begin{center}
+\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{4.5cm} >{\raggedright\arraybackslash}p{6.2cm} >{\raggedright\arraybackslash}p{1.0cm} >{\raggedright\arraybackslash}p{1.1cm}}
+\toprule
+Suite & Test & Purpose & Result & Time \\
+\midrule
+\endfirsthead
+\toprule
+Suite & Test & Purpose & Result & Time \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+Generic & \path{T01_writes_recorded} & a GPU write marks all managed pages dirty. & PASS & -- \\
+Generic & \path{T02_reads_not_recorded} & read-only GPU accesses do not create dirty entries. & PASS & -- \\
+Generic & \path{T03_reset_clears_table} & resetting tracking removes pre-reset entries. & PASS & -- \\
+Generic & \path{T04_mixed_read_write} & read-only pages stay clean while written pages are tracked. & PASS & -- \\
+Generic & \path{T05_migration_write_retracked} & pages are tracked again after CPU migration and a fresh GPU write. & PASS & -- \\
+Generic & \path{T06_tracking_disabled} & procfs reports tracking inactive when tracking is disabled. & PASS & -- \\
+Generic & \path{T07_pid_recorded} & each recorded dirty entry carries the creator PID. & PASS & -- \\
+Generic & \path{T08_same_page_single_entry} & repeated writes to the same page do not create duplicate entries. & PASS & -- \\
+Generic & \path{T09_range_inside} & a range exactly covering the allocation returns all pages. & PASS & -- \\
+Generic & \path{T10_range_outside} & a disjoint range returns no dirty pages. & PASS & -- \\
+Generic & \path{T11_range_partial_coverage} & only the in-range half of an allocation is returned. & PASS & -- \\
+Generic & \path{T12_range_boundary_pages} & Checks inclusive/exclusive boundary handling for the configured range. & PASS & -- \\
+Table lifecycle & \path{tc01_basic_lifecycle} & Verifies that a normal start-query-stop tracking cycle works. & PASS & 1.98\,s \\
+Table lifecycle & \path{tc02_reinit_clears_entries} & restarting tracking clears the previous epoch's entries. & PASS & 1.95\,s \\
+Table lifecycle & \path{tc03_stop_start_empty_table} & stop followed by restart begins from an empty table. & PASS & 1.95\,s \\
+Table lifecycle & \path{tc04_multi_reinit_stress} & Repeats restart cycles to ensure only the current epoch remains visible. & PASS & 1.98\,s \\
+Table lifecycle & \path{tc05_two_allocs_one_table} & two allocations within one process share the same tracking table correctly. & PASS & 1.97\,s \\
+Ordering & \path{tc01_write_before_start} & Confirms writes issued before tracking starts are not reported later. & PASS & 1.97\,s \\
+Ordering & \path{tc02_ts_monotonic} & Checks whether recorded timestamps remain sensible across per-page writes. & PASS & 1.97\,s \\
+Ordering & \path{tc03_query_nondestructive} & Verifies that reading \texttt{dirty\_pages} does not consume existing entries. & PASS & 1.95\,s \\
+Ordering & \path{tc04_empty_table_active} & Checks query behaviour when tracking is active but no page is dirty yet. & PASS & 1.96\,s \\
+Ordering & \path{tc05_epoch_isolation} & Verifies that pages from one epoch do not leak into the next. & PASS & 1.97\,s \\
+Ordering & \path{tc06_concurrent_streams} & Stresses concurrent page recording with multiple CUDA streams writing in parallel. & PASS & 1.99\,s \\
+Ordering & \path{tc07_sentinel_flood} & an early sentinel write survives a later flood of writes. & PASS & 1.98\,s \\
+Ordering & \path{tc08_flood_between_queries} & two heavy write phases remain visible across intermediate queries. & PASS & 1.99\,s \\
+Address range & \path{tc01_two_alloc_range_isolation} & Verifies that the configured range selects one allocation and excludes another. & PASS & 1.98\,s \\
+Address range & \path{tc02_range_sequential_reads_threaded} & Checks stable filtered output while different subranges are read in sequence. & PASS & 1.94\,s \\
+Address range & \path{tc03_subpage_start_rounding} & a sub-page range start rounds to the expected page boundary. & PASS & 1.95\,s \\
+Address range & \path{tc04_inverted_and_zero_range} & Verifies that invalid or empty ranges do not return spurious entries. & PASS & 1.99\,s \\
+Address range & \path{tc05_filter_before_start_track} & Checks whether a range set before tracking starts is applied correctly. & PASS & 1.99\,s \\
+Latency & \path{tc01_fault_to_visibility_latency} & Measures how quickly dirtied pages become visible after kernel completion. & PASS & 1.97\,s \\
+Latency & \path{tc02_ts_sleep_coherence} & Checks whether timestamps preserve a deliberate gap between write batches. & PASS & 2.07\,s \\
+\end{longtable}
+\normalsize
+\end{center}
+
+\paragraph{Current interpretation.}
+These results give initial evidence that the current implementation is already stable across epoch lifecycle management, non-destructive querying, range filtering, PID tagging, and short latency-to-visibility checks. A fuller evaluation is still needed for larger dirty sets and explicit overhead measurements, but the present test battery now provides a credible behavioural baseline for the next phase of performance work.
+
