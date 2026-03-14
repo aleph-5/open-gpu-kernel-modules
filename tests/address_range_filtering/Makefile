@@ -1,5 +1,5 @@
 NVCC      = nvcc
-NVCCFLAGS = -lpthread
+NVCCFLAGS =
 
 SRCS = $(wildcard tc*.cu)
 BINS = $(SRCS:.cu=)

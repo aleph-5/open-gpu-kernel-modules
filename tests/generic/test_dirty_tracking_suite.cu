@@ -116,9 +116,11 @@ static void sysfs_write(const char *path, const char *val)
     close(fd);
 }
 
+char pid_str[50];
+
 static int  sysfs_exists(const char *p)    { struct stat st; return stat(p, &st) == 0; }
-static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, "1\n"); }
-static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, "1\n"); }
+static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, pid_str); }
+static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, pid_str); }
 
 static void set_query_pid(pid_t pid)
     { char b[32]; snprintf(b, sizeof(b), "%d\n", pid); sysfs_write(PROCFS_DIRTY_QUERY, b); }
@@ -458,6 +460,8 @@ static void t12_range_boundary_pages(int *managed, int dev)
 
 int main(void)
 {
+	sprintf(pid_str, "%d\n", getpid());
+
     int *managed = NULL, dev;
 
     pid_t my_pid = getpid();
