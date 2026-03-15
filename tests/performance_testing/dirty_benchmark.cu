@@ -93,7 +93,16 @@ int main(int argc, char **argv)
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 
     /* ================================================================
-     * BASELINE: kernel run with NO dirty tracking active
+     * WARMUP READ: bring all pages into GPU cache before timing.
+     * This ensures both baseline and tracked runs start with data
+     * already resident on GPU, so we measure fault overhead only.
+     * ================================================================ */
+    kernel_write<<<blocks, threads>>>(buf, n_pages);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    /* ================================================================
+     * BASELINE: data on GPU, write PTEs established — zero faults.
+     * Measures pure kernel execution with no UVM overhead.
      * ================================================================ */
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -101,7 +110,7 @@ int main(int argc, char **argv)
     CUDA_CHECK(cudaDeviceSynchronize());
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long baseline_ns = ns_elapsed(&t0, &t1);
-    printf("[BASELINE]  kernel time : %.3f ms  (no tracking)\n",
+    printf("[BASELINE]  kernel time : %.3f ms  (no faults, no tracking)\n",
            baseline_ns / 1e6);
 
     /* ================================================================
