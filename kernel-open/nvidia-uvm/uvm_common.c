@@ -57,7 +57,7 @@ bool uvm_dirty_tracking_active_for_pid(pid_t pid) {
     mutex_lock(&pid_to_page_table_lock);
     struct uvm_dirty_page_table* page_table = uvm_dirty_page_table_by_pid(pid);
     // EDIT BY SANKALP MITTAL
-    bool is_active = page_table != NULL; 
+    bool is_active = (page_table != NULL); 
     // Prevents races when the page table is being destroyed and re-created for the same pid
     mutex_unlock(&pid_to_page_table_lock);
     return is_active;
