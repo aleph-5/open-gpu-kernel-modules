@@ -43,8 +43,6 @@ static void procfs_write(const char *path, const char *val)
     close(fd);
 }
 
-/* Count dirty page entries from procfs. Returns -1 on open error,
- * -2 if tracking is not active for the queried pid. */
 static long count_dirty_pages(void)
 {
     FILE *f = fopen(PROCFS_PAGES, "r");
@@ -70,16 +68,11 @@ int main(int argc, char **argv)
     if (argc > 1) n_pages = atol(argv[1]);
 
     size_t buf_size = (size_t)n_pages * PAGE_SIZE_BYTES;
-    printf("=== Dirty Tracking Benchmark: %ld pages (%.1f MB) ===\n",
-           n_pages, buf_size / 1e6);
+    printf("[tc01] %ld pages (%.1f MB)\n", n_pages, buf_size / 1e6);
 
     char pid_str[32];
     snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
 
-    /* ---- allocate + CPU touch (mirrors test suite memset) ----
-     * This ensures va_blocks are created with creator_pid = this process's
-     * tgid, not the UVM kthread's tgid that would be used if the GPU
-     * accessed the pages first. */
     char *buf;
     CUDA_CHECK(cudaMallocManaged(&buf, buf_size));
     memset(buf, 0, buf_size);
@@ -88,44 +81,28 @@ int main(int argc, char **argv)
     int threads = 256;
     int blocks  = (n_pages + threads - 1) / threads;
 
-    /* ---- set query pid + range (same as test suite) ---- */
     procfs_write(PROCFS_QUERY, pid_str);
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 
-    /* ================================================================
-     * WARMUP READ: bring all pages into GPU cache before timing.
-     * This ensures both baseline and tracked runs start with data
-     * already resident on GPU, so we measure fault overhead only.
-     * ================================================================ */
+    // warmup: bring pages to GPU
     kernel_write<<<blocks, threads>>>(buf, n_pages);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    /* ================================================================
-     * BASELINE: data on GPU, write PTEs established — zero faults.
-     * Measures pure kernel execution with no UVM overhead.
-     * ================================================================ */
+    // baseline: data already resident on GPU, no faults
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     kernel_write<<<blocks, threads>>>(buf, n_pages);
     CUDA_CHECK(cudaDeviceSynchronize());
     clock_gettime(CLOCK_MONOTONIC, &t1);
     long baseline_ns = ns_elapsed(&t0, &t1);
-    printf("[BASELINE]  kernel time : %.3f ms  (no faults, no tracking)\n",
-           baseline_ns / 1e6);
+    printf("[tc01] baseline  : %.3f ms\n", baseline_ns / 1e6);
 
-    /* ================================================================
-     * TRACKED: start tracking → run kernel → read results
-     * Mirrors t01_writes_recorded from the test suite.
-     * ================================================================ */
-
-    /* start_track reinits the table AND invalidates all GPU PTEs so the
-     * next GPU write to each page generates a fresh fault. */
+    // tracked: start_track invalidates PTEs, next access generates faults
     struct timespec ti0, ti1;
     clock_gettime(CLOCK_MONOTONIC, &ti0);
     procfs_write(PROCFS_START, pid_str);
     clock_gettime(CLOCK_MONOTONIC, &ti1);
-    long invalidate_ns = ns_elapsed(&ti0, &ti1);
-    printf("[INVALIDATE] start_track: %.3f ms\n", invalidate_ns / 1e6);
+    printf("[tc01] invalidate: %.3f ms\n", ns_elapsed(&ti0, &ti1) / 1e6);
 
     struct timespec t2, t3;
     clock_gettime(CLOCK_MONOTONIC, &t2);
@@ -135,20 +112,19 @@ int main(int argc, char **argv)
     long tracked_ns = ns_elapsed(&t2, &t3);
 
     long recorded = count_dirty_pages();
-
     procfs_write(PROCFS_STOP, pid_str);
 
-    printf("[TRACKED]   kernel time : %.3f ms  (with tracking)\n",
-           tracked_ns / 1e6);
-    printf("[OVERHEAD]  extra time  : %.3f ms  (%.1f%%)\n",
+    printf("[tc01] tracked   : %.3f ms\n", tracked_ns / 1e6);
+    printf("[tc01] overhead  : %.3f ms  (%.1f%%)\n",
            (tracked_ns - baseline_ns) / 1e6,
            100.0 * (tracked_ns - baseline_ns) / baseline_ns);
-    printf("[RESULTS]   recorded    : %ld / %ld pages\n", recorded, n_pages);
-    printf("[RESULTS]   missing     : %ld pages\n", n_pages - recorded);
+    printf("[tc01] recorded  : %ld / %ld pages\n", recorded, n_pages);
+    printf("[tc01] missing   : %ld pages\n", n_pages - recorded);
     if (tracked_ns > 0 && recorded > 0)
-        printf("[RESULTS]   record rate : %.0f pages/sec\n",
+        printf("[tc01] rate      : %.0f pages/sec\n",
                recorded / (tracked_ns / 1e9));
 
     CUDA_CHECK(cudaFree(buf));
     return (recorded == n_pages) ? 0 : 1;
 }
+

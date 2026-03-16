@@ -1,14 +1,16 @@
 NVCC      = nvcc
 NVCCFLAGS = -O2 -lm
 
-TARGETS = perf_dirty_tracking
+SRCS = tc01_stress_testing.cu tc02_performance_overhead.cu
+BINS = $(SRCS:.cu=)
 
-all: $(TARGETS)
+all: $(BINS)
 
-perf_dirty_tracking: perf_dirty_tracking.cu
+%: %.cu
 	$(NVCC) $(NVCCFLAGS) -o $@ $<
 
 clean:
-	rm -f $(TARGETS)
+	rm -f $(BINS)
 
 .PHONY: all clean
+

@@ -101,7 +101,7 @@ a distinct concern:
           \texttt{uvm\_va\_space\_dirty\_init} during module initialisation.
 \end{enumerate}
 
-\subsection*{Initial Performance Evaluation}
+\subsection*{Correctness Tests}
 
 At this stage, evaluation is driven by the CUDA tests under \texttt{tests/}.
 The suites are intended to cover five broad questions:
@@ -194,3 +194,63 @@ Latency & \path{tc02_ts_sleep_coherence} & Checks whether timestamps preserve a 
 \paragraph{Current interpretation.}
 These results give initial evidence that the current implementation is already stable across epoch lifecycle management, non-destructive querying, range filtering, PID tagging, and short latency-to-visibility checks. A fuller evaluation is still needed for larger dirty sets and explicit overhead measurements, but the present test battery now provides a credible behavioural baseline for the next phase of performance work.
 
+\subsection*{Performance Tests}
+At this stage, evaluation is driven by the CUDA tests under \texttt{tests/performance\_testing}.
+These tests cover the following categories
+
+\paragraph{1. Stress Testing}
+The \texttt{tc01\_stress\_testing} suite verifies that no dirty pages are
+missed under high write pressure.
+A single \texttt{cudaMallocManaged} allocation of $N$ pages (default
+$N = 1000$, configurable via command-line argument) is first warmed up with
+a GPU write kernel so that all pages are resident on the device before
+tracking begins.
+Tracking is then started, which invalidates all GPU page-table entries and
+forces a fresh write-fault for each page on the subsequent kernel launch.
+After the kernel completes, \texttt{dirty\_pages} is queried and the
+recorded count is compared against $N$; the test passes if and only if
+every page has been recorded.
+The suite also prints baseline and tracked kernel runtimes together with
+the per-run invalidation latency.
+
+
+\paragraph{2. Performance Overhead}
+This tracks the overhead that our solution introduces across the following workload types
+\begin{itemize}
+      \item \textbf{READ}: We only do read accesses
+      \item \textbf{WRITE}: We only do write accesses
+      \item \textbf{MIXED}: Half of the access are reads and the other half are writes
+\end{itemize}
+This test runs a simple workload across different number of pages and different number of iterations of repeating these access.
+This workload is then run with dirty tracking active and then the 2 times are compared. 
+The results can be found in \path{results.csv}
+To simulate environments when the tracking in activated when a program is already running
+pages are prefetched before starting the benchmarking
+
+\paragraph{Observations}
+The tests were run as root and although the current implementation correctly tracked
+all pages under high write loads
+, the performance overhead was extremely high reaching as high as 1000\% under \textit{Write only} loads.
+
+
+\begin{center}
+\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{4.5cm} >{\raggedright\arraybackslash}p{6.2cm} >{\raggedright\arraybackslash}p{2.5cm}}
+\toprule
+Suite & Test & Purpose & Result \\
+\midrule
+\endfirsthead
+\toprule
+Suite & Test & Purpose & Result \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+Performance & \path{tc01_stress_testing} & under heavy loads no pages are missed & PASS\\
+Performance & \path{tc02_performance_overhead} & check the performance penalty imposed by our dirty tracking approach & Check \texttt{results.csv}
+\end{longtable}
+\normalsize
+\end{center}
