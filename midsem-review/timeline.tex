@@ -28,7 +28,7 @@
         \item \textbf{Extension of Functionality} \hfill \textit{(2 week)}
         \begin{enumerate}
             \item Extend the tracking mechanism to support additional features such as multiple concurrent processes, concurrent tracking on
-            CPU and GPU side, and range-based dirty tracking to allow selective monitoring of specific virtual memory regions.
+            CPU and GPU side, and removing write permission for the tracked pages at init, instead of invalidating them to reduce overread due to read-only GPU pages % range-based dirty tracking to allow selective monitoring of specific virtual memory regions. %%ARUSH: Arn't we doing this already? replacing with a new point
             \item Extend the \texttt{procfs} interface to expose richer statistics, including per-page access 
             frequency counters and dirty page age, to enable more informed migration and eviction decisions by user-space tools.
         \end{enumerate}

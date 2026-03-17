@@ -2770,7 +2770,7 @@ static void uvm_dirty_invalidate_all_gpu_mappings(void)
 
     block_ctx = uvm_va_block_context_alloc(NULL);
     if (!block_ctx) {
-        printk(KERN_ERR "uvm_dirty: failed to alloc block_ctx for GPU unmap\n");
+        // printk(KERN_ERR "uvm_dirty: failed to alloc block_ctx for GPU unmap\n");
         return;
     }
 

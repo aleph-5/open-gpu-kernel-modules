@@ -62,9 +62,12 @@ static long count_dirty_pages(void)
 
 int main(int argc, char **argv)
 {
-    if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
+    if (geteuid() != 0) { 
+        fprintf(stderr, "ERROR: must run as root\n");
+        return 1; 
+    }
 
-    long n_pages = 1000;
+    long n_pages = 100000;
     if (argc > 1) n_pages = atol(argv[1]);
 
     size_t buf_size = (size_t)n_pages * PAGE_SIZE_BYTES;

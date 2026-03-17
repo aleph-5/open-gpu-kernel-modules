@@ -1294,7 +1294,7 @@ NV_STATUS uvm_va_block_create(uvm_va_range_managed_t *managed_range,
     block->managed_range = managed_range;
 
     // EDIT BY VIDHI JAIN
-    block->creator_pid = current->tgid;
+    block->creator_pid = managed_range ? managed_range->creator_pid : current->tgid;
     //END OF EDIT
 
     uvm_tracker_init(&block->tracker);

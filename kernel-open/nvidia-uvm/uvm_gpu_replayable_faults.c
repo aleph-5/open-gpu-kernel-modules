@@ -1366,13 +1366,13 @@ static uvm_fault_access_type_t check_fault_access_permissions(uvm_gpu_t *gpu,
         cancel_va_mode = UVM_FAULT_CANCEL_VA_MODE_ALL;
     }
 
-    printk(KERN_ERR "UVM: GPU fault permission violation at VA 0x%llx | "
-           "access_type=%d cancel_mode=%s fatal_reason=%d\n",
-           fault_entry->fault_address,
-           fault_entry->fault_access_type,
-           (cancel_va_mode == UVM_FAULT_CANCEL_VA_MODE_ALL) ?
-               "ALL" : "WRITE_AND_ATOMIC",
-           fatal_reason);
+    // printk(KERN_ERR "UVM: GPU fault permission violation at VA 0x%llx | "
+    //        "access_type=%d cancel_mode=%s fatal_reason=%d\n",
+    //        fault_entry->fault_address,
+    //        fault_entry->fault_access_type,
+    //        (cancel_va_mode == UVM_FAULT_CANCEL_VA_MODE_ALL) ?
+    //            "ALL" : "WRITE_AND_ATOMIC",
+    //        fatal_reason);
 
     mark_fault_fatal(batch_context, fault_entry, fatal_reason, cancel_va_mode);
 
@@ -1594,6 +1594,11 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
 		NvU64 fault_addr = va_block->start + ((NvU64)page_index << PAGE_SHIFT);
 
         // EDIT BY ADITI KHANDELIA
+    //     printk(KERN_INFO "uvm_dirty: creator_pid=%d active=%d access_type=%d\n",
+    //    va_block->creator_pid,
+    //    (int)uvm_dirty_tracking_active_for_pid(va_block->creator_pid),
+    //    service_access_type);
+
         if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid) && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
 
@@ -2014,9 +2019,9 @@ static NV_STATUS service_fault_batch_dispatch(uvm_va_space_t *va_space,
         status = NV_ERR_INVALID_ADDRESS;
 
     if (status == NV_ERR_INVALID_ADDRESS) {
-        printk(KERN_ERR "UVM: GPU fault on unmapped address 0x%llx | "
-               "access_type=%d (no VA range or HMM block found)\n",
-               fault_address, current_entry->fault_access_type);
+        // printk(KERN_ERR "UVM: GPU fault on unmapped address 0x%llx | "
+        //        "access_type=%d (no VA range or HMM block found)\n",
+        //        fault_address, current_entry->fault_access_type);
     }
 
     if (status == NV_OK) {
