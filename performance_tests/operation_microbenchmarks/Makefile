@@ -12,4 +12,7 @@ all: $(BINS)
 clean:
 	rm -f $(BINS)
 
+clean_csv:
+	rm -f *.csv
+
 .PHONY: all clean
