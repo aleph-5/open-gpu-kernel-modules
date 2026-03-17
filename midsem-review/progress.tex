@@ -5,7 +5,7 @@
 
 \subsection*{Implementation of Dirty Access Tracking in UVM Driver}
 
-\paragraph{Workflow.}
+\paragraph{Workflow}
 A tracking epoch begins when a privileged user-space tool writes to
 \texttt{dirty\_pids\_start\_track}.
 This initialises a fresh per-process table and immediately invalidates all
@@ -23,7 +23,7 @@ The epoch ends when the tool writes to \texttt{dirty\_pids\_stop\_track},
 which frees all recorded state. Re-starting tracking destroys any existing
 table before creating a fresh one, cleanly beginning a new epoch.
 
-\paragraph{Data Structures.}
+\paragraph{Data Structures}
 The tracking state is organised as a two-level structure defined in
 \texttt{uvm\_common.h}.
 
@@ -45,7 +45,7 @@ the current epoch. The faults may be serviced by different CPU-side driver threa
 thus the timestamp may not be strictly monotonic, depending upon the driver-side service thread
 recording the same.
 
-\paragraph{APIs Exposed.}
+\paragraph{APIs Exposed}
 User-space interacts with the tracker exclusively through five
 \texttt{procfs} entries created under \texttt{/proc/driver/nvidia-uvm/}:
 
@@ -71,7 +71,7 @@ User-space interacts with the tracker exclusively through five
           produces an empty result rather than undefined behaviour.
 \end{enumerate}
 
-\paragraph{Internal Functions and Implementation Sites.}
+\paragraph{Internal Functions and Implementation Sites}
 The implementation is spread across several driver files, each responsible for
 a distinct concern:
 
@@ -103,28 +103,30 @@ a distinct concern:
 
 \subsection*{Correctness Tests}
 
-At this stage, evaluation is driven by the CUDA tests under \texttt{tests/}.
-The suites are intended to cover five broad questions:
+At this stage, evaluation is driven by the CUDA tests under \texttt{correctness\_tests/}.
+The suites are intended to cover four broad questions:
 
-\paragraph{1. Generic sanity checks.}
-The \texttt{generic} suite is the basic end-to-end test for dirty-page
-tracking: it GPU writes are recorded, read-only accesses are not,
-and that reset, disable, PID reporting, and range filtering behave as expected.
+\begin{enumerate}
+    \item \textbf{Generic sanity checks:}
+          The \texttt{generic} suite is the basic end-to-end test for dirty-page
+          tracking: it GPU writes are recorded, read-only accesses are not,
+          and that reset, disable, PID reporting, and range filtering behave as expected.
 
-\paragraph{2. Table lifecycle.}
-The \texttt{table\_lifecycle} suite checks whether starting, stopping, and
-restarting tracking creates a clean epoch each time without stale entries
-leaking across resets.
+    \item \textbf{Table lifecycle:}
+          The \texttt{table\_lifecycle} suite checks whether starting, stopping, and
+          restarting tracking creates a clean epoch each time without stale entries
+          leaking across resets.
 
-\paragraph{3. Ordering and concurrency.}
-The \texttt{ordering} suite checks whether timestamps and page membership stay
-reasonable when writes arrive across epochs, across repeated queries, and under
-high-concurrency GPU execution.
+    \item \textbf{Ordering and concurrency:}
+          The \texttt{ordering} suite checks whether timestamps and page membership stay
+          reasonable when writes arrive across epochs, across repeated queries, and under
+          high-concurrency GPU execution.
 
-\paragraph{4. Address-range filtering.}
-The \texttt{address\_range\_filtering} suite checks whether
-\texttt{dirty\_range} correctly limits query results and whether query-time
-range filtering behaves correctly across valid and invalid ranges.
+    \item \textbf{Address-range filtering:}
+          The \texttt{address\_range\_filtering} suite checks whether
+          \texttt{dirty\_range} correctly limits query results and whether query-time
+          range filtering behaves correctly across valid and invalid ranges.
+\end{enumerate}
 
 \paragraph{Observations}
 The tests were rerun as root, and the current implementation passed every test
@@ -184,46 +186,49 @@ Address range & \path{tc05_filter_before_start_track} & Checks whether a range s
 \normalsize
 \end{center}
 
-\paragraph{Current interpretation.}
+\paragraph{Current interpretation}
 These results give initial evidence that the current implementation is already stable across epoch lifecycle management, non-destructive querying, range filtering and PID tagging checks. A fuller evaluation is still needed for larger dirty sets and explicit overhead measurements, but the present test battery now provides a credible behavioural baseline for the next phase of performance work.
 
 \subsection*{Performance Tests}
 At this stage, evaluation is driven by the CUDA tests under \texttt{tests/performance\_testing}.
 These tests cover the following categories
 
-\paragraph{1. Stress Testing}
-The \texttt{tc01\_stress\_testing} suite verifies that no dirty pages are
-missed under high write pressure.
-A single \texttt{cudaMallocManaged} allocation of $N$ pages (default
-$N = 1000$, configurable via command-line argument) is first warmed up with
-a GPU write kernel so that all pages are resident on the device before
-tracking begins.
-Tracking is then started, which invalidates all GPU page-table entries and
-forces a fresh write-fault for each page on the subsequent kernel launch.
-After the kernel completes, \texttt{dirty\_pages} is queried and the
-recorded count is compared against $N$; the test passes if and only if
-every page has been recorded.
-The suite also prints baseline and tracked kernel runtimes together with
-the per-run invalidation latency.
+\begin{enumerate}
+      \item \textbf{Stress Testing:}
+      The \texttt{tc01\_stress\_testing} suite verifies that no dirty pages are
+      missed under high write pressure.
+      A single \texttt{cudaMallocManaged} allocation of $N$ pages (default
+      $N = 1000$, configurable via command-line argument) is first warmed up with
+      a GPU write kernel so that all pages are resident on the device before
+      tracking begins.
+      Tracking is then started, which invalidates all GPU page-table entries and
+      forces a fresh write-fault for each page on the subsequent kernel launch.
+      After the kernel completes, \texttt{dirty\_pages} is queried and the
+      recorded count is compared against $N$; the test passes if and only if
+      every page has been recorded.
+      The suite also prints baseline and tracked kernel runtimes together with
+      the per-run invalidation latency.
 
 
-\paragraph{2. Performance Overhead}
-This tracks the overhead that our solution introduces across the following workload types
-\begin{itemize}
-      \item \textbf{READ}: We only do read accesses
-      \item \textbf{WRITE}: We only do write accesses
-      \item \textbf{MIXED}: Half of the access are reads and the other half are writes
-\end{itemize}
-This test runs a simple workload across different number of pages and different number of iterations of repeating these access.
-This workload is then run with dirty tracking active and then the 2 times are compared. 
-The results can be found in \path{results.csv}
-To simulate environments when the tracking in activated when a program is already running
-pages are prefetched before starting the benchmarking
+      \item \textbf{Performance Overhead:}
+      This tracks the overhead that our solution introduces across the following workload types
+      \begin{itemize}
+            \item \textbf{READ}: We only do read accesses
+            \item \textbf{WRITE}: We only do write accesses
+            \item \textbf{MIXED}: Half of the access are reads and the other half are writes
+      \end{itemize}
+      This test runs a simple workload across different number of pages and different number of 
+      iterations of repeating these access.
+      This workload is then run with dirty tracking active and then the 2 times are compared. 
+      The results can be found in \path{results.csv}
+      To simulate environments when the tracking in activated when a program is already running
+      pages are prefetched before starting the benchmarking
+\end{enumerate}
 
 \paragraph{Observations}
 The tests were run as root and although the current implementation correctly tracked
-all pages under high write loads
-, the performance overhead was extremely high reaching as high as 1000\% under \textit{Write only} loads.
+all pages under high write loads, the performance overhead was extremely high 
+reaching as high as 1000\% under \textit{Write only} loads.
 
 
 \begin{center}

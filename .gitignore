@@ -16,6 +16,9 @@ tests/test_dirty_tracking_suite
 *.log
 *.aux
 *.synctex.gz
+*.fls
+*.*latexmk
+
 tests/address_range_filtering/tc04_inverted_and_zero_range
 tests/address_range_filtering/tc05_filter_before_start_track
 tests/address_range_filtering/tc03_subpage_start_rounding

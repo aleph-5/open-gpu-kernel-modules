@@ -26,12 +26,6 @@ All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}. The file
 \end{enumerate}
 
 \subsection*{Tests}
-User-space tests are divided categorized into correctness and performance tests and located in the \texttt{correctness\_tests/} and \texttt{performance\_tests/} directories respectively % , organised into the following subdirectories:
+User-space tests are divided categorized into correctness and performance tests and located in the \texttt{correctness\_tests/} and \texttt{performance\_tests/} directories respectively
 
-% \begin{enumerate}
-%     \item \texttt{generic} - Basic functionality tests for the dirty tracking API, like recording and querying dirty pages.
-%     \item \texttt{address\_range\_filtering} - Tests for range-based selective dirty tracking.
-%     \item \texttt{ordering} - Tests verifying the ordering guarantees of fault recording.
-%     \item \texttt{table\_lifecycle} - Tests for correct initialisation and teardown of tracking tables across process lifecycles.
-%     \item \texttt{latency} - Benchmarks measuring per-fault overhead introduced by the tracking mechanism.
-% \end{enumerate}
+The correctness tests are run everytime the driver is modified and reloaded using  \texttt{run\_regression.sh}
