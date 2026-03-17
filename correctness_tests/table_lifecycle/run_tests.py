@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-run_tests.py — table_lifecycle test runner
+run_tests.py - table_lifecycle test runner
 
 Builds all tc*.cu files then runs each binary (as root via sudo if needed)
 and reports PASS / FAIL per test.
@@ -92,7 +92,7 @@ def main():
         sys.exit(0)
 
     print(color(f"{'='*60}", ANSI_BOLD))
-    print(color(f"  table_lifecycle — {len(binaries)} test(s)", ANSI_BOLD))
+    print(color(f"  table_lifecycle - {len(binaries)} test(s)", ANSI_BOLD))
     print(color(f"{'='*60}", ANSI_BOLD))
     print()
 

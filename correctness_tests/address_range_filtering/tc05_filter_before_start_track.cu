@@ -1,30 +1,30 @@
 /*
- * tc05_filter_before_start_track.cu — address_range_filtering tests
+ * tc05_filter_before_start_track.cu - address_range_filtering tests
  *
  * The dirty_range filter is a pair of global variables
  * (dirty_query_start / dirty_query_end) that live independently of the
  * per-pid xarray table.  The recording path (uvm_dirty_page_table_record,
- * called from the GPU fault handler) has no knowledge of dirty_range —
+ * called from the GPU fault handler) has no knowledge of dirty_range -
  * it always inserts unconditionally if the page is not already present.
  * The filter is applied only at read time inside nv_procfs_read_dirty_pages.
  *
  * This test verifies that conclusion:
  *
- *   Step 1 — set dirty_range to the FIRST HALF of the allocation before
+ *   Step 1 - set dirty_range to the FIRST HALF of the allocation before
  *             start_track is called.
- *   Step 2 — start_track (table is initialised, all GPU PTEs invalidated).
- *   Step 3 — four CPU threads write ALL pages concurrently (both halves).
- *   Step 4 — Read A: dirty_range still covers first half only.
+ *   Step 2 - start_track (table is initialised, all GPU PTEs invalidated).
+ *   Step 3 - four CPU threads write ALL pages concurrently (both halves).
+ *   Step 4 - Read A: dirty_range still covers first half only.
  *             Expected: first-half pages present, second-half pages absent.
  *             If the filter were applied at insert time, only first-half pages
  *             would ever enter the xarray; if it is read-time, both halves are
  *             in the xarray but only the first half is returned.
- *   Step 5 — Read B: reset dirty_range to full address space (no table reset).
+ *   Step 5 - Read B: reset dirty_range to full address space (no table reset).
  *             Expected: BOTH halves present.
  *             This is the decisive probe: if second-half pages appear in Read B,
- *             they were in the xarray all along — the filter is read-time only.
+ *             they were in the xarray all along - the filter is read-time only.
  *             If second-half pages are absent in Read B, they were never
- *             recorded — the filter somehow acts at insert time (unexpected).
+ *             recorded - the filter somehow acts at insert time (unexpected).
  */
 
 #include <stdio.h>
@@ -149,7 +149,7 @@ static int count_in_half(entry_t *e, int n, unsigned long base, int second_half)
 }
 
 int main(void) {
-    printf("[tc05] filter_before_start_track — %d pages (%d per thread), %d threads\n",
+    printf("[tc05] filter_before_start_track - %d pages (%d per thread), %d threads\n",
            NUM_PAGES, PAGES_PER_THREAD, NUM_THREADS);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
@@ -181,7 +181,7 @@ int main(void) {
     start_track(pid);
     printf("[tc05] start_track issued\n");
 
-    /* Step 3: write ALL pages concurrently — both halves. */
+    /* Step 3: write ALL pages concurrently - both halves. */
     thread_arg_t args[NUM_THREADS];
     pthread_t threads[NUM_THREADS];
     for (int t = 0; t < NUM_THREADS; t++) {
@@ -198,14 +198,14 @@ int main(void) {
     entry_t *e = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e) { fprintf(stderr, "malloc failed\n"); return 1; }
 
-    /* Step 4: Read A — range still set to first half. */
+    /* Step 4: Read A - range still set to first half. */
     int nA    = read_dirty(e, MAX_ENTRIES);
     int fh_A  = (nA >= 0) ? count_in_half(e, nA, base, 0) : -1;
     int sh_A  = (nA >= 0) ? count_in_half(e, nA, base, 1) : -1;
     printf("[tc05] readA (range=first_half): total=%d  first_half=%d (want %d)  second_half=%d (want 0)\n",
            nA, fh_A, HALF_PAGES, sh_A);
 
-    /* Step 5: Read B — reset range, decisive probe for xarray contents. */
+    /* Step 5: Read B - reset range, decisive probe for xarray contents. */
     reset_range();
     int nB    = read_dirty(e, MAX_ENTRIES);
     int fh_B  = (nB >= 0) ? count_in_half(e, nB, base, 0) : -1;
@@ -223,7 +223,7 @@ int main(void) {
         printf("[tc05] FAIL readA: table not active (n=%d)\n", nA); failed = 1;
     } else {
         if (fh_A != HALF_PAGES) {
-            printf("[tc05] FAIL readA: first half — %d/%d pages missing\n",
+            printf("[tc05] FAIL readA: first half - %d/%d pages missing\n",
                    HALF_PAGES - fh_A, HALF_PAGES);
             failed = 1;
         }
@@ -237,7 +237,7 @@ int main(void) {
         printf("[tc05] FAIL readB: table not active (n=%d)\n", nB); failed = 1;
     } else {
         if (fh_B != HALF_PAGES) {
-            printf("[tc05] FAIL readB: first half — %d/%d pages missing\n",
+            printf("[tc05] FAIL readB: first half - %d/%d pages missing\n",
                    HALF_PAGES - fh_B, HALF_PAGES);
             failed = 1;
         }
@@ -246,7 +246,7 @@ int main(void) {
          * If they are absent here, the filter acted at insert time (unexpected).
          */
         if (sh_B != HALF_PAGES) {
-            printf("[tc05] FAIL readB: second half — %d/%d pages missing after range reset\n",
+            printf("[tc05] FAIL readB: second half - %d/%d pages missing after range reset\n",
                    HALF_PAGES - sh_B, HALF_PAGES);
             printf("[tc05]   => second-half pages were NOT recorded: filter acts at INSERT time\n");
             failed = 1;

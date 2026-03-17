@@ -15,7 +15,7 @@
  * All 4 streams are dispatched without sync between them.
  *
  * Checks that all 256 pages across all streams are captured with no missing
- * entries — i.e. the tracker handles concurrent fault streams without dropping
+ * entries - i.e. the tracker handles concurrent fault streams without dropping
  * records.  Timestamp ordering is deliberately not checked: CUDA stream
  * ordering guarantees dispatch order, not fault-service order, so blocks from
  * the same stream can fault out-of-order when multiple SMs are in flight. */

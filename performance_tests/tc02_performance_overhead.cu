@@ -22,7 +22,7 @@ static const int ITER_COUNTS[]  = { 10, 50, 200 };
 #define CUDA_CHECK(call) do {                                              \
     cudaError_t _e = (call);                                               \
     if (_e != cudaSuccess) {                                               \
-        fprintf(stderr, "CUDA error at %s:%d — %s\n",                     \
+        fprintf(stderr, "CUDA error at %s:%d - %s\n",                     \
                 __FILE__, __LINE__, cudaGetErrorString(_e));               \
         exit(1);                                                           \
     }                                                                      \
@@ -190,7 +190,7 @@ int main(void)
         return 1;
     }
     if (!sysfs_exists(PROCFS_START)) {
-        fprintf(stderr, "ERROR: %s not found — is the nvidia-uvm module loaded?\n", PROCFS_START);
+        fprintf(stderr, "ERROR: %s not found - is the nvidia-uvm module loaded?\n", PROCFS_START);
         return 1;
     }
 
@@ -239,7 +239,7 @@ int main(void)
                               ? (on.wall_avg_ms - off.wall_avg_ms) / off.wall_avg_ms * 100.0
                               : 0.0;
 
-                printf("%s,%d,%d,OFF,%.4f,%.4f,%.4f,%.4f,—\n",
+                printf("%s,%d,%d,OFF,%.4f,%.4f,%.4f,%.4f,-\n",
                        wl_name(wl), pages, iters,
                        off.kernel_avg_ms, off.kernel_std_ms,
                        off.wall_avg_ms,   off.wall_std_ms);

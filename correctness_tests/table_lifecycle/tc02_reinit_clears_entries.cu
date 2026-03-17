@@ -114,7 +114,7 @@ int main(void) {
     printf("[tc02] wrote pages 0..%d (pre-reinit)\n", half - 1);
 
     start_track(pid);
-    printf("[tc02] reinit (start_track again) — old entries should be cleared\n");
+    printf("[tc02] reinit (start_track again) - old entries should be cleared\n");
 
     gpu_write_range<<<1, 1>>>(managed, half, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());

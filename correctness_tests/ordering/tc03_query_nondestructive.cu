@@ -148,7 +148,7 @@ int main(void) {
     if (n2 < 0) printf("[tc03]   snap2 failed (n2=%d)\n", n2);
     if (r1_in_snap1 != half)  printf("[tc03]   snap1 missing round-1 pages (%d/%d)\n", r1_in_snap1, half);
     if (r2_in_snap1 != 0)     printf("[tc03]   snap1 has round-2 pages before they were written (%d)\n", r2_in_snap1);
-    if (r1_in_snap2 != half)  printf("[tc03]   snap2 missing round-1 pages after second query (%d/%d) — query was destructive\n", r1_in_snap2, half);
+    if (r1_in_snap2 != half)  printf("[tc03]   snap2 missing round-1 pages after second query (%d/%d) - query was destructive\n", r1_in_snap2, half);
     if (r2_in_snap2 != half)  printf("[tc03]   snap2 missing round-2 pages (%d/%d)\n", r2_in_snap2, half);
     return failed;
 }

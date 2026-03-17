@@ -1,18 +1,18 @@
-/* test_dirty_tracking_suite.cu — UVM dirty page tracking tests
+/* test_dirty_tracking_suite.cu - UVM dirty page tracking tests
  * GROUP A: basic tracking  |  GROUP B: pid logging + addr range filter
  *
  * Kernel interface:
- *   /proc/driver/nvidia-uvm/dirty_pids_start_track — write anything to start
+ *   /proc/driver/nvidia-uvm/dirty_pids_start_track - write anything to start
  *       tracking for the current process (inits/reinits table + invalidates
  *       all GPU PTEs so subsequent faults are recorded fresh)
- *   /proc/driver/nvidia-uvm/dirty_pids_stop_track  — write anything to stop
+ *   /proc/driver/nvidia-uvm/dirty_pids_stop_track  - write anything to stop
  *       tracking for the current process (destroys table)
- *   /proc/driver/nvidia-uvm/dirty_pid_to_query     — write a pid to select
+ *   /proc/driver/nvidia-uvm/dirty_pid_to_query     - write a pid to select
  *       which process's dirty pages are returned on the next dirty_pages read
- *   /proc/driver/nvidia-uvm/dirty_pages  — read dirty entries:
+ *   /proc/driver/nvidia-uvm/dirty_pages  - read dirty entries:
  *       "# dirty tracking not active for pid <N>"  when disabled
  *       "0x<addr_hex> <timestamp_ns> <pid>"  one line per dirty page
- *   /proc/driver/nvidia-uvm/dirty_range — write "<start_hex> <end_hex>" to
+ *   /proc/driver/nvidia-uvm/dirty_range - write "<start_hex> <end_hex>" to
  *       restrict which pages are returned on the next read; defaults to
  *       [0, ~0UL] (all pages).  Reset by writing "0x0 0xffffffffffffffff".
  *
@@ -42,7 +42,7 @@
 #define CUDA_CHECK(call) do {                                              \
     cudaError_t _e = (call);                                               \
     if (_e != cudaSuccess) {                                               \
-        fprintf(stderr, "CUDA error at %s:%d — %s\n",                      \
+        fprintf(stderr, "CUDA error at %s:%d - %s\n",                      \
                 __FILE__, __LINE__, cudaGetErrorString(_e));               \
         exit(1);                                                           \
     }                                                                      \
@@ -144,14 +144,14 @@ static int g_pass = 0, g_fail = 0, g_skip = 0;
 static void print_result(const char *id, const char *name, result_t r,
                          const char *expected, const char *actual)
 {
-    printf("  [%s] %s — %s\n", r == PASS ? "PASS" : r == SKIP ? "SKIP" : "FAIL", id, name);
+    printf("  [%s] %s - %s\n", r == PASS ? "PASS" : r == SKIP ? "SKIP" : "FAIL", id, name);
     if (expected && expected[0]) printf("         expected: %s\n", expected);
     if (actual   && actual[0])   printf("         actual:   %s\n", actual);
     if (r == PASS) g_pass++; else if (r == FAIL) g_fail++; else g_skip++;
 }
 
 /* =========================================================================
- * GROUP A — basic tracking semantics
+ * GROUP A - basic tracking semantics
  * ========================================================================= */
 
 static void t01_writes_recorded(int *managed, int dev)
@@ -297,7 +297,7 @@ static void t06_tracking_disabled(int *managed, int dev)
 }
 
 /* =========================================================================
- * GROUP B — pid field correctness + addr range filter
+ * GROUP B - pid field correctness + addr range filter
  * ========================================================================= */
 
 /* T07: every dirty entry for our managed allocation must carry our pid.
@@ -337,7 +337,7 @@ static void t07_pid_recorded(int *managed, int dev)
 }
 
 /* T08: writing the same pages a second time (without resetting the table)
- * must not duplicate entries — xarray overwrites on the same key. */
+ * must not duplicate entries - xarray overwrites on the same key. */
 static void t08_same_page_single_entry(int *managed, int dev)
 {
     dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
@@ -347,7 +347,7 @@ static void t08_same_page_single_entry(int *managed, int dev)
     /* First write cycle */
     kernel_write<<<1, 1>>>(managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    /* Second write cycle — same virtual pages, no table reset */
+    /* Second write cycle - same virtual pages, no table reset */
     kernel_write<<<1, 1>>>(managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
     int n = read_procfs(e, MAX_ENTRIES);
@@ -366,7 +366,7 @@ static void t08_same_page_single_entry(int *managed, int dev)
     print_result("T08", "same_page_single_entry", out.result, out.expected, out.actual);
 }
 
-/* T09: addr range covers all managed pages — all pages must appear. */
+/* T09: addr range covers all managed pages - all pages must appear. */
 static void t09_range_inside(int *managed, int dev)
 {
     dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
@@ -385,7 +385,7 @@ static void t09_range_inside(int *managed, int dev)
     print_result("T09", "range_inside", out.result, out.expected, out.actual);
 }
 
-/* T10: addr range is entirely above managed allocation — no pages must appear. */
+/* T10: addr range is entirely above managed allocation - no pages must appear. */
 static void t10_range_outside(int *managed, int dev)
 {
     dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
@@ -406,7 +406,7 @@ static void t10_range_outside(int *managed, int dev)
     print_result("T10", "range_outside", out.result, out.expected, out.actual);
 }
 
-/* T11: addr range covers only the first half — second half must be absent. */
+/* T11: addr range covers only the first half - second half must be absent. */
 static void t11_range_partial_coverage(int *managed, int dev)
 {
     dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
@@ -430,7 +430,7 @@ static void t11_range_partial_coverage(int *managed, int dev)
     print_result("T11", "range_partial_coverage", out.result, out.expected, out.actual);
 }
 
-/* T12: range excludes first and last page — only inner pages must appear. */
+/* T12: range excludes first and last page - only inner pages must appear. */
 static void t12_range_boundary_pages(int *managed, int dev)
 {
     dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };

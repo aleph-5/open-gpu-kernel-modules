@@ -1,5 +1,5 @@
 /*
- * tc01_two_alloc_range_isolation.cu — address_range_filtering tests
+ * tc01_two_alloc_range_isolation.cu - address_range_filtering tests
  *
  * Two CPU threads each launch a GPU write kernel against their own managed
  * allocation (alloc_a, alloc_b) via separate CUDA streams, all within the
@@ -8,12 +8,12 @@
  *
  * After both writes complete, the dirty_range filter is probed in two phases:
  *
- *   Phase 1 — range set to [alloc_a_base, alloc_a_base + alloc_size):
+ *   Phase 1 - range set to [alloc_a_base, alloc_a_base + alloc_size):
  *     Expected: alloc_a pages present, alloc_b pages absent.
  *     This checks that the filter correctly excludes pages outside the range
  *     even when two allocations are stored in the same xarray.
  *
- *   Phase 2 — range reset to full address space (no table reset):
+ *   Phase 2 - range reset to full address space (no table reset):
  *     Expected: pages from BOTH allocations present.
  *     This confirms entries are not consumed by the Phase 1 read, i.e.
  *     the procfs read is non-destructive.
@@ -50,7 +50,7 @@
 
 typedef struct { unsigned long addr, ts; int pid; } entry_t;
 
-/* One block, 256 threads — each thread covers a strided range of ints. */
+/* One block, 256 threads - each thread covers a strided range of ints. */
 __global__ void write_pages(int *data, int n) {
     for (int i = threadIdx.x; i < n; i += blockDim.x)
         data[i] = i + 1;
@@ -99,7 +99,7 @@ static void stop_track(pid_t p) {
 }
 
 /*
- * dirty_range_write uses sscanf(kbuf, "%lx %lx", ...) — %lx handles the 0x
+ * dirty_range_write uses sscanf(kbuf, "%lx %lx", ...) - %lx handles the 0x
  * prefix, and dirty_query_end is exclusive (kernel does (end-1)>>PAGE_SHIFT).
  */
 static void set_range(unsigned long s, unsigned long e) {
@@ -139,7 +139,7 @@ static int count_in_alloc(entry_t *e, int n, unsigned long base) {
 }
 
 int main(void) {
-    printf("[tc01] two_alloc_range_isolation — %d pages per alloc, 2 threads\n", NUM_PAGES);
+    printf("[tc01] two_alloc_range_isolation - %d pages per alloc, 2 threads\n", NUM_PAGES);
 
     if (geteuid() != 0) { 
         fprintf(stderr, "ERROR: must run as root\n"); 
@@ -186,7 +186,7 @@ int main(void) {
     printf("[tc01] phase1 (range=alloc_a): total=%d  in_a=%d (want %d)  in_b=%d (want 0)\n",
            n1, a_p1, NUM_PAGES, b_p1);
 
-    /* ---- Phase 2: reset range — both allocs should be visible ----------- */
+    /* ---- Phase 2: reset range - both allocs should be visible ----------- */
     reset_range();
     int n2   = read_dirty(e, MAX_ENTRIES);
     int a_p2 = (n2 >= 0) ? count_in_alloc(e, n2, base_a) : -1;
@@ -206,7 +206,7 @@ int main(void) {
         failed = 1;
     } else {
         if (a_p1 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase1 alloc_a — %d/%d pages missing\n",
+            printf("[tc01] FAIL: phase1 alloc_a - %d/%d pages missing\n",
                    NUM_PAGES - a_p1, NUM_PAGES);
             failed = 1;
         }
@@ -221,12 +221,12 @@ int main(void) {
         failed = 1;
     } else {
         if (a_p2 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase2 alloc_a — %d/%d pages missing (non-destructive read?)\n",
+            printf("[tc01] FAIL: phase2 alloc_a - %d/%d pages missing (non-destructive read?)\n",
                    NUM_PAGES - a_p2, NUM_PAGES);
             failed = 1;
         }
         if (b_p2 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase2 alloc_b — %d/%d pages missing\n",
+            printf("[tc01] FAIL: phase2 alloc_b - %d/%d pages missing\n",
                    NUM_PAGES - b_p2, NUM_PAGES);
             failed = 1;
         }

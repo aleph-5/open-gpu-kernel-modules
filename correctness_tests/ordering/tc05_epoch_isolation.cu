@@ -115,7 +115,7 @@ int main(void) {
     stop_track(pid);
     printf("[tc05] epoch 1: stopped\n");
 
-    /* touch second half now — tracking is OFF, these must not appear in epoch 2 */
+    /* touch second half now - tracking is OFF, these must not appear in epoch 2 */
     gpu_write_range<<<1, 32>>>(managed, HALF_PAGES, HALF_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc05] inter-epoch: wrote pages %d..%d (tracking off)\n",

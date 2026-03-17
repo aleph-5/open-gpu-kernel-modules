@@ -1,7 +1,7 @@
 NVCC     = nvcc
 NVCCFLAGS =
 
-TARGETS = test_dirty_tracking test_dirty_tracking_suite
+TARGETS = test_dirty_tracking_suite
 
 all: $(TARGETS)
 

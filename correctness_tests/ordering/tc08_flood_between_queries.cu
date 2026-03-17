@@ -14,17 +14,17 @@
 /* Two-phase write with a cross-phase timestamp ordering check.
  *
  * Phase A: small kernel writes the first HALF_PAGES pages.
- *          Query → record max_ts_A (highest timestamp seen in phase A).
+ *          Query -> record max_ts_A (highest timestamp seen in phase A).
  *
- * Phase B: massive kernel — 1024 blocks x 256 threads = 262,144 threads —
+ * Phase B: massive kernel - 1024 blocks x 256 threads = 262,144 threads -
  *          writes the second HALF_PAGES pages.
- *          Query → check every phase-B entry has ts >= max_ts_A.
+ *          Query -> check every phase-B entry has ts >= max_ts_A.
  *
  * Ordering invariant:
  *   All phase-B faults happen AFTER phase-A completes (cudaDeviceSynchronize
  *   separates the two kernels).  So every phase-B timestamp must be >=
  *   the maximum phase-A timestamp.  Any phase-B entry with ts < max_ts_A
- *   is an ordering violation — the tracker recorded a later fault with an
+ *   is an ordering violation - the tracker recorded a later fault with an
  *   earlier timestamp. */
 
 #define HALF_PAGES        512

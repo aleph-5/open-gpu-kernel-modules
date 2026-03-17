@@ -1,5 +1,5 @@
 /*
- * tc02_range_sequential_reads_threaded.cu — address_range_filtering tests
+ * tc02_range_sequential_reads_threaded.cu - address_range_filtering tests
  *
  * A single managed allocation is divided into 4 equal quarters (Q0..Q3).
  * Four CPU threads each launch a GPU write kernel to their own quarter via
@@ -8,10 +8,10 @@
  * After all writes complete, the dirty_range filter is applied in two
  * successive reads WITHOUT resetting the tracking table between them:
  *
- *   Read 1 — range = [Q0_base, Q2_base)  (quarters 0 and 1 only):
+ *   Read 1 - range = [Q0_base, Q2_base)  (quarters 0 and 1 only):
  *     Expected: Q0 and Q1 pages present, Q2 and Q3 pages absent.
  *
- *   Read 2 — range = [Q2_base, Q4_base)  (quarters 2 and 3 only):
+ *   Read 2 - range = [Q2_base, Q4_base)  (quarters 2 and 3 only):
  *     Expected: Q0 and Q1 pages absent, Q2 and Q3 pages present.
  *
  * This probes two things simultaneously:
@@ -160,7 +160,7 @@ static void tally_quarter(entry_t *e, int n, unsigned long base, int q,
 }
 
 int main(void) {
-    printf("[tc02] range_sequential_reads_threaded — %d quarters x %d pages, %d threads\n",
+    printf("[tc02] range_sequential_reads_threaded - %d quarters x %d pages, %d threads\n",
            NUM_QUARTERS, PAGES_PER_QUARTER, NUM_QUARTERS);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
@@ -247,7 +247,7 @@ int main(void) {
         /* Q0 and Q1 must be fully present */
         for (int q = 0; q < 2; q++)
             if (present1[q] != PAGES_PER_QUARTER) {
-                printf("[tc02] FAIL: read1 Q%d — %d/%d pages missing\n",
+                printf("[tc02] FAIL: read1 Q%d - %d/%d pages missing\n",
                        q, PAGES_PER_QUARTER - present1[q], PAGES_PER_QUARTER);
                 failed = 1;
             }
@@ -274,7 +274,7 @@ int main(void) {
         /* Q2 and Q3 must be fully present (entries survived read1) */
         for (int q = 2; q < NUM_QUARTERS; q++)
             if (present2[q] != PAGES_PER_QUARTER) {
-                printf("[tc02] FAIL: read2 Q%d — %d/%d pages missing (consumed by read1?)\n",
+                printf("[tc02] FAIL: read2 Q%d - %d/%d pages missing (consumed by read1?)\n",
                        q, PAGES_PER_QUARTER - present2[q], PAGES_PER_QUARTER);
                 failed = 1;
             }

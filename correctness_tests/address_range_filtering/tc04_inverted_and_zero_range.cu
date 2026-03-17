@@ -1,5 +1,5 @@
 /*
- * tc04_inverted_and_zero_range.cu — address_range_filtering tests
+ * tc04_inverted_and_zero_range.cu - address_range_filtering tests
  *
  * The kernel reads the dirty page table via:
  *
@@ -11,14 +11,14 @@
  * This opens three degenerate range cases that are never guarded by the
  * kernel code:
  *
- *   Case A — zero-width (start == end):
+ *   Case A - zero-width (start == end):
  *     end_index = (start - 1) >> PAGE_SHIFT < start_index
- *     xa_find returns nothing → 0 entries expected.
+ *     xa_find returns nothing -> 0 entries expected.
  *
- *   Case B — inverted (start > end, both non-zero):
- *     end_index < start_index in page space → 0 entries expected.
+ *   Case B - inverted (start > end, both non-zero):
+ *     end_index < start_index in page space -> 0 entries expected.
  *
- *   Case C — end underflow (end == 0):
+ *   Case C - end underflow (end == 0):
  *     end_index = (0 - 1) >> PAGE_SHIFT = ULONG_MAX >> PAGE_SHIFT (~huge)
  *     xa_find walks from start_index to a near-infinite max.
  *     Expected behaviour: all pages at or above start_index appear.
@@ -163,7 +163,7 @@ static int count_in_alloc(entry_t *e,
 }
 
 int main(void) {
-    printf("[tc04] inverted_and_zero_range — %d pages, %d threads\n", NUM_PAGES, NUM_THREADS);
+    printf("[tc04] inverted_and_zero_range - %d pages, %d threads\n", NUM_PAGES, NUM_THREADS);
 
     if (geteuid() != 0) { 
         fprintf(stderr, "ERROR: must run as root\n"); 

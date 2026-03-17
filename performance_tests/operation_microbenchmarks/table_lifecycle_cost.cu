@@ -210,7 +210,7 @@ int main(void)
             int recorded = count_recorded_pages(pid, buf, (size_t)n * PAGE_SIZE);
             if (recorded != n) {
                 fprintf(stderr,
-                        "iter %d: expected %d recorded pages, got %d — skipping\n",
+                        "iter %d: expected %d recorded pages, got %d - skipping\n",
                         iter, n, recorded);
                 write_pid_to_procfs(PROCFS_STOP, pid);
                 continue;
@@ -261,7 +261,7 @@ int main(void)
                                                     (size_t)n * PAGE_SIZE);
                 if (recorded != n) {
                     fprintf(stderr,
-                            "reinit iter %d (n=%d m=%d): expected %d got %d — skipping\n",
+                            "reinit iter %d (n=%d m=%d): expected %d got %d - skipping\n",
                             iter, n, m, n, recorded);
                     write_pid_to_procfs(PROCFS_STOP, pid);
                     continue;

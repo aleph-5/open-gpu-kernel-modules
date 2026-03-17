@@ -1,5 +1,5 @@
 /*
- * tc03_subpage_start_rounding.cu — address_range_filtering tests
+ * tc03_subpage_start_rounding.cu - address_range_filtering tests
  *
  * The kernel converts dirty_query_start to a page index by right-shifting:
  *
@@ -13,22 +13,22 @@
  *
  * Similarly, dirty_query_end is exclusive via:
  *   end_index = (dirty_query_end - 1) >> PAGE_SHIFT
- * so a sub-page end address rounds DOWN too — a page is included only if
+ * so a sub-page end address rounds DOWN too - a page is included only if
  * its index <= end_index.
  *
  * Test layout (8 pages, 4 CPU threads):
- *   Thread 0 → pages 0-1    Thread 1 → pages 2-3
- *   Thread 2 → pages 4-5    Thread 3 → pages 6-7
+ *   Thread 0 -> pages 0-1    Thread 1 -> pages 2-3
+ *   Thread 2 -> pages 4-5    Thread 3 -> pages 6-7
  *
  * Two filter probes after all writes:
  *
- *   Probe A — start = base + PAGE_SIZE/2, end = base + 4*PAGE_SIZE
+ *   Probe A - start = base + PAGE_SIZE/2, end = base + 4*PAGE_SIZE
  *     start_index == page 0 (rounded down)
  *     end_index   == page 3 (rounded down from base+4*PAGE_SIZE-1)
  *     Expected: pages 0-3 present, pages 4-7 absent.
  *     Specifically page 0 presence confirms the "rounds down" behaviour.
  *
- *   Probe B — start = base + PAGE_SIZE/2, end = base + PAGE_SIZE
+ *   Probe B - start = base + PAGE_SIZE/2, end = base + PAGE_SIZE
  *     start_index == page 0, end_index == page 0
  *     A one-page window opened by a sub-page start: page 0 only.
  *     Expected: exactly 1 page (page 0) present, pages 1-7 absent.
@@ -159,7 +159,7 @@ static int page_present(entry_t *e, int n, unsigned long base, int pg) {
 }
 
 int main(void) {
-    printf("[tc03] subpage_start_rounding — %d pages, %d threads\n", NUM_PAGES, NUM_THREADS);
+    printf("[tc03] subpage_start_rounding - %d pages, %d threads\n", NUM_PAGES, NUM_THREADS);
 
     if (geteuid() != 0) { 
         fprintf(stderr, "ERROR: must run as root\n"); 

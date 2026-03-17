@@ -121,7 +121,7 @@ int main(void)
 
     /* ---- create table B (fresh) ---- */
     start_track(pid);
-    printf("[tc03] table B initialized — no writes will follow\n");
+    printf("[tc03] table B initialized - no writes will follow\n");
 
     /* ---- query table B: must be 0 entries (active but empty) ---- */
     set_range_full();

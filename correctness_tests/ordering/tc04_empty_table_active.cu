@@ -94,7 +94,7 @@ int main(void) {
 
     start_track(pid);
 
-    /* query immediately — no GPU writes yet */
+    /* query immediately - no GPU writes yet */
     entry_t pre[MAX_ENTRIES];
     set_range_full();
     int n_pre = read_pages(pre, MAX_ENTRIES);
@@ -112,9 +112,9 @@ int main(void) {
     stop_track(pid);
     CUDA_CHECK(cudaFree(managed));
 
-    /* n_pre==0  → table is active but empty (correct)
-     * n_pre==-2 → table not active (bug)
-     * n_pre>0   → stale entries in a fresh table (bug)
+    /* n_pre==0  -> table is active but empty (correct)
+     * n_pre==-2 -> table not active (bug)
+     * n_pre>0   -> stale entries in a fresh table (bug)
      * n_post should match NUM_PAGES */
     int failed = (n_pre != 0 || n_post < NUM_PAGES);
     printf("[tc04] %s\n", failed ? "FAIL" : "PASS");
