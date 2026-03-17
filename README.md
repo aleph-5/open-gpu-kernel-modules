@@ -30,7 +30,6 @@ open-gpu-kernel-modules/
 |   |-- table_lifecycle/        # Epoch start/stop/restart lifecycle
 |   |-- ordering/               # Timestamp and epoch isolation
 |   |-- address_range_filtering/# Range-based query filtering
-|   |-- latency/                # Fault-to-visibility and timestamp coherence
 |   |-- concurrency/            # Concurrent write stress tests
 |   |-- stress/                 # High write-pressure page coverage
 |   `-- pid_attribution_isolation/ # Per-process isolation checks
@@ -158,7 +157,7 @@ Performance overhead results are written to `performance_tests/results.csv`.
 
 ### Correctness
 
-Current result: **32/32 tests pass** across all suites.
+Current result: **30/30 tests pass** across all suites.
 
 | Suite | Tests | Result |
 |---|---|---|
@@ -166,7 +165,6 @@ Current result: **32/32 tests pass** across all suites.
 | `table_lifecycle` | 5 | 5/5 |
 | `ordering` | 8 | 8/8 |
 | `address_range_filtering` | 5 | 5/5 |
-| `latency` | 2 | 2/2 |
 
 ### Performance
 

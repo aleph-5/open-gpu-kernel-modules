@@ -126,17 +126,12 @@ The \texttt{address\_range\_filtering} suite checks whether
 \texttt{dirty\_range} correctly limits query results and whether query-time
 range filtering behaves correctly across valid and invalid ranges.
 
-\paragraph{5. Fault-to-visibility latency.}
-The \texttt{latency} suite checks whether newly dirtied pages become visible
-soon after kernel completion and whether recorded timestamps preserve coarse
-temporal separation between two write phases.
-
 \paragraph{Observations}
 The tests were rerun as root, and the current implementation passed every test
 that is still present in the repository. The aggregate result was
-\textbf{32/32 passed}: \texttt{table\_lifecycle} 5/5,
-\texttt{ordering} 8/8, \texttt{address\_range\_filtering} 5/5,
-\texttt{latency} 2/2, and the \texttt{generic} suite 12/12. The per-test
+\textbf{30/30 passed}: \texttt{table\_lifecycle} 5/5,
+\texttt{ordering} 8/8, \texttt{address\_range\_filtering} 5/5, 
+and the \texttt{generic} suite 12/12. The per-test
 runners for the first four suites report runtimes between 1.94\,s and 2.07\,s.
 
 \begin{center}
@@ -185,14 +180,12 @@ Address range & \path{tc02_range_sequential_reads_threaded} & Checks stable filt
 Address range & \path{tc03_subpage_start_rounding} & a sub-page range start rounds to the expected page boundary. & PASS & 1.95\,s \\
 Address range & \path{tc04_inverted_and_zero_range} & Verifies that invalid or empty ranges do not return spurious entries. & PASS & 1.99\,s \\
 Address range & \path{tc05_filter_before_start_track} & Checks whether a range set before tracking starts is applied correctly. & PASS & 1.99\,s \\
-Latency & \path{tc01_fault_to_visibility_latency} & Measures how quickly dirtied pages become visible after kernel completion. & PASS & 1.97\,s \\
-Latency & \path{tc02_ts_sleep_coherence} & Checks whether timestamps preserve a deliberate gap between write batches. & PASS & 2.07\,s \\
 \end{longtable}
 \normalsize
 \end{center}
 
 \paragraph{Current interpretation.}
-These results give initial evidence that the current implementation is already stable across epoch lifecycle management, non-destructive querying, range filtering, PID tagging, and short latency-to-visibility checks. A fuller evaluation is still needed for larger dirty sets and explicit overhead measurements, but the present test battery now provides a credible behavioural baseline for the next phase of performance work.
+These results give initial evidence that the current implementation is already stable across epoch lifecycle management, non-destructive querying, range filtering and PID tagging checks. A fuller evaluation is still needed for larger dirty sets and explicit overhead measurements, but the present test battery now provides a credible behavioural baseline for the next phase of performance work.
 
 \subsection*{Performance Tests}
 At this stage, evaluation is driven by the CUDA tests under \texttt{tests/performance\_testing}.
