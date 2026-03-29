@@ -58,7 +58,6 @@ bool uvm_dirty_tracking_active_for_pid(pid_t pid) {
     struct uvm_dirty_page_table* page_table = uvm_dirty_page_table_by_pid(pid);
     // EDIT BY SANKALP MITTAL
     bool is_active = (page_table != NULL); 
-    // Prevents races when the page table is being destroyed and re-created for the same pid
     mutex_unlock(&pid_to_page_table_lock);
     return is_active;
     // END OF EDIT
@@ -177,6 +176,7 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     //printk(KERN_INFO "Recorded dirty page: page_number=0x%lx, timestamp=%lu\n", page_number, timestamp);
 
     mutex_unlock(&pid_to_page_table_lock);
+
     return NV_OK;
 }
 
@@ -203,6 +203,7 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
     //       info->page_number, info->timestamp, info->pid);
 
     if (!locked) mutex_unlock(&pid_to_page_table_lock);
+
     return info;
 }
 
@@ -430,7 +431,7 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
                         &pid_to_query_fops);
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
-    
+
     return NV_OK;
 }
 

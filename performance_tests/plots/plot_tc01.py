@@ -17,7 +17,7 @@ import seaborn as sns
 
 # -- paths --------------------------------------------------------------------
 SCRIPT_DIR  = os.path.dirname(os.path.abspath(__file__))
-CSV_PATH    = os.path.join(SCRIPT_DIR, "..", "results.csv")
+CSV_PATH   = os.path.join(SCRIPT_DIR, "..", "general_performance","performance_overhead.csv")
 OUT_DIR     = os.path.join(SCRIPT_DIR, "..", "..", "midsem-review", "figures")
 os.makedirs(OUT_DIR, exist_ok=True)
 
