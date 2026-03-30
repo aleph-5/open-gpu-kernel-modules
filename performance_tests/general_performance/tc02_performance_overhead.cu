@@ -15,9 +15,8 @@ static const int ITER_COUNTS[]  = { 10, 50, 200 };
 #define N_PAGE_COUNTS  ((int)(sizeof(PAGE_COUNTS) / sizeof(PAGE_COUNTS[0])))
 #define N_ITER_COUNTS  ((int)(sizeof(ITER_COUNTS)  / sizeof(ITER_COUNTS[0])))
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 
 #define CUDA_CHECK(call) do {                                              \
     cudaError_t _e = (call);                                               \
@@ -91,18 +90,11 @@ static int sysfs_exists(const char *p)
     return stat(p, &st) == 0;
 }
 
-static char pid_str[50];
 
-static void tracking_on(void)  { procfs_write(PROCFS_START, pid_str); }
-static void tracking_off(void) { procfs_write(PROCFS_STOP,  pid_str); }
-static void reset_table(void)  { procfs_write(PROCFS_START, pid_str); }
+static void tracking_on(void)  { procfs_write(PROCFS_START, "start\n"); }
+static void tracking_off(void) { procfs_write(PROCFS_STOP, "stop\n"); }
+static void reset_table(void)  { procfs_write(PROCFS_START, "start\n"); }
 
-static void set_query_pid(pid_t pid)
-{
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", pid);
-    procfs_write(PROCFS_QUERY, b);
-}
 
 static double wall_ms(void)
 {
@@ -194,11 +186,7 @@ int main(void)
         return 1;
     }
 
-    pid_t my_pid = getpid();
-    sprintf(pid_str, "%d\n", my_pid);
-    set_query_pid(my_pid);
-
-    int max_pages = PAGE_COUNTS[N_PAGE_COUNTS - 1];
+    pid_t my_pid = getpid();    int max_pages = PAGE_COUNTS[N_PAGE_COUNTS - 1];
     int *managed  = NULL;
     int *sink_dev = NULL;
     CUDA_CHECK(cudaMallocManaged(&managed, (size_t)max_pages * PAGE_SIZE));

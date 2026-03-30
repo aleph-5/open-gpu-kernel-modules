@@ -1,23 +1,17 @@
 /* test_dirty_tracking_suite.cu - UVM dirty page tracking tests
- * GROUP A: basic tracking  |  GROUP B: pid logging + addr range filter
+ * GROUP A: basic tracking  |  GROUP B: addr range filter
  *
  * Kernel interface:
- *   /proc/driver/nvidia-uvm/dirty_pids_start_track - write anything to start
- *       tracking for the current process (inits/reinits table + invalidates
- *       all GPU PTEs so subsequent faults are recorded fresh)
- *   /proc/driver/nvidia-uvm/dirty_pids_stop_track  - write anything to stop
- *       tracking for the current process (destroys table)
- *   /proc/driver/nvidia-uvm/dirty_pid_to_query     - write a pid to select
- *       which process's dirty pages are returned on the next dirty_pages read
+ *   /proc/driver/nvidia-uvm/dirty_tracking_start - write "start" to begin tracking globally
+ *       (inits/reinits table + invalidates GPU PTEs so subsequent faults are recorded fresh)
+ *   /proc/driver/nvidia-uvm/dirty_tracking_stop  - write "stop" to stop tracking (destroys table)
  *   /proc/driver/nvidia-uvm/dirty_pages  - read dirty entries:
- *       "# dirty tracking not active for pid <N>"  when disabled
- *       "0x<addr_hex> <timestamp_ns> <pid>"  one line per dirty page
+ *       "# dirty tracking not active" when disabled
+ *       "0x<addr_hex> <timestamp_ns>"  one line per dirty page
  *   /proc/driver/nvidia-uvm/dirty_range - write "<start_hex> <end_hex>" to
  *       restrict which pages are returned on the next read; defaults to
  *       [0, ~0UL] (all pages).  Reset by writing "0x0 0xffffffffffffffff".
  *
- * pid in entries is va_block->creator_pid (tgid of the cudaMallocManaged
- * caller), not the pid of the process that triggered the GPU fault.
  */
 
 #include <stdio.h>
@@ -28,9 +22,8 @@
 #include <sys/stat.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_DIRTY_START "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_DIRTY_STOP  "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_DIRTY_QUERY "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_DIRTY_START "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_DIRTY_STOP  "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_DIRTY       "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_DIRTY_RANGE "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -50,7 +43,7 @@
 
 typedef enum { PASS = 0, FAIL = 1, SKIP = 2 } result_t;
 typedef struct { result_t result; char expected[512]; char actual[512]; } outcome_t;
-typedef struct { unsigned long addr, timestamp_ns; pid_t pid; } dirty_entry_t;
+typedef struct { unsigned long addr, timestamp_ns; } dirty_entry_t;
 
 __global__ void kernel_read(const int *data, int n, volatile int *sink)
 {
@@ -71,7 +64,7 @@ __global__ void kernel_write_range(int *data, int ps, int pe)
 }
 
 /* Returns number of dirty entries parsed, -1 on open error, -2 if tracking
- * is not active.  Parses the 3-field format: 0x<addr> <ts_ns> <pid>. */
+ * is not active.  Parses: 0x<addr> <ts_ns>. */
 static int read_procfs(dirty_entry_t *out, int max)
 {
     FILE *f = fopen(PROCFS_DIRTY, "r");
@@ -83,10 +76,8 @@ static int read_procfs(dirty_entry_t *out, int max)
             continue;
         }
         if (n >= max) break;
-        int pid;
-        if (sscanf(line, "0x%lx %lu %d",
-                   &out[n].addr, &out[n].timestamp_ns, &pid) == 3) {
-            out[n].pid = (pid_t)pid;
+        if (sscanf(line, "0x%lx %lu",
+                   &out[n].addr, &out[n].timestamp_ns) == 2) {
             n++;
         }
     }
@@ -100,14 +91,6 @@ static int is_page_tracked(dirty_entry_t *e, int n, unsigned long addr)
     return 0;
 }
 
-/* Returns the recorded pid for the page containing addr, or -1 if not found. */
-static pid_t get_page_pid(dirty_entry_t *e, int n, unsigned long addr)
-{
-    unsigned long pa = addr & ~((unsigned long)(PAGE_SIZE - 1));
-    for (int i = 0; i < n; i++) if (e[i].addr == pa) return e[i].pid;
-    return -1;
-}
-
 static void sysfs_write(const char *path, const char *val)
 {
     int fd = open(path, O_WRONLY);
@@ -116,39 +99,10 @@ static void sysfs_write(const char *path, const char *val)
     close(fd);
 }
 
-char pid_str[50];
-
 static int  sysfs_exists(const char *p)    { struct stat st; return stat(p, &st) == 0; }
-static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, pid_str); }
-static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, pid_str); }
+static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, v ? "start\n" : "stop\n"); }
+static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, "start\n"); }
 
-static void set_query_pid(pid_t pid)
-    { char b[32]; snprintf(b, sizeof(b), "%d\n", pid); sysfs_write(PROCFS_DIRTY_QUERY, b); }
-
-/* Reset addr range filter to the full address space (kernel default). */
-static void reset_addr_range(void)
-    { sysfs_write(PROCFS_DIRTY_RANGE, "0x0 0xffffffffffffffff\n"); }
-
-static void set_addr_range(unsigned long s, unsigned long e)
-    { char b[64]; snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e); sysfs_write(PROCFS_DIRTY_RANGE, b); }
-
-/* static void migrate_to_cpu(void *ptr, size_t bytes) */
-/* { */
-/*     cudaMemLocation loc = { cudaMemLocationTypeHost, 0 }; */
-/*     CUDA_CHECK(cudaMemPrefetchAsync(ptr, bytes, loc, 0)); */
-/*     CUDA_CHECK(cudaDeviceSynchronize()); */
-/* } */
-
-static int g_pass = 0, g_fail = 0, g_skip = 0;
-
-static void print_result(const char *id, const char *name, result_t r,
-                         const char *expected, const char *actual)
-{
-    printf("  [%s] %s - %s\n", r == PASS ? "PASS" : r == SKIP ? "SKIP" : "FAIL", id, name);
-    if (expected && expected[0]) printf("         expected: %s\n", expected);
-    if (actual   && actual[0])   printf("         actual:   %s\n", actual);
-    if (r == PASS) g_pass++; else if (r == FAIL) g_fail++; else g_skip++;
-}
 
 /* =========================================================================
  * GROUP A - basic tracking semantics
@@ -297,44 +251,8 @@ static void t06_tracking_disabled(int *managed, int dev)
 }
 
 /* =========================================================================
- * GROUP B - pid field correctness + addr range filter
+ * GROUP B - addr range filter
  * ========================================================================= */
-
-/* T07: every dirty entry for our managed allocation must carry our pid.
- * The kernel records va_block->creator_pid = tgid of the cudaMallocManaged
- * caller, which is this process. */
-static void t07_pid_recorded(int *managed, int dev)
-{
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    pid_t my_pid = getpid();
-    snprintf(out.expected, sizeof(out.expected),
-             "all %d dirty entries carry pid=%d (creator of the VA block)", NUM_PAGES, my_pid);
-    set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n); out.result = FAIL;
-    } else {
-        int wrong = 0, miss = 0;
-        for (int p = 0; p < NUM_PAGES; p++) {
-            unsigned long addr = (unsigned long)managed + p * PAGE_SIZE;
-            pid_t recorded = get_page_pid(e, n, addr);
-            if (recorded == -1)          miss++;
-            else if (recorded != my_pid) wrong++;
-        }
-        if (miss || wrong)
-            snprintf(out.actual, sizeof(out.actual),
-                     "missing=%d wrong_pid=%d (expected pid=%d, total=%d)",
-                     miss, wrong, my_pid, n);
-        else
-            snprintf(out.actual, sizeof(out.actual),
-                     "all %d pages carry pid=%d (total=%d)", NUM_PAGES, my_pid, n);
-        if (miss || wrong) out.result = FAIL;
-    }
-    set_tracking(0);
-    print_result("T07", "pid_recorded", out.result, out.expected, out.actual);
-}
 
 /* T08: writing the same pages a second time (without resetting the table)
  * must not duplicate entries - xarray overwrites on the same key. */
@@ -460,12 +378,9 @@ static void t12_range_boundary_pages(int *managed, int dev)
 
 int main(void)
 {
-	sprintf(pid_str, "%d\n", getpid());
-
     int *managed = NULL, dev;
 
-    pid_t my_pid = getpid();
-    printf("=== UVM Dirty Tracking Test Suite ===\nPID = %d\n\n", my_pid);
+    printf("=== UVM Dirty Tracking Test Suite ===\n\n");
 
     if (geteuid() != 0)
         { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
@@ -481,8 +396,6 @@ int main(void)
     printf("  managed: 0x%lx - 0x%lx  (%d pages)\n\n",
            (unsigned long)managed, (unsigned long)managed + NUM_PAGES * PAGE_SIZE, NUM_PAGES);
 
-    /* Tell the kernel which pid to report when reading dirty_pages. */
-    set_query_pid(my_pid);
 
     printf("--- GROUP A ---\n");
     t01_writes_recorded          (managed, dev);
@@ -494,7 +407,6 @@ int main(void)
 
     printf("\n--- GROUP B ---\n");
     reset_addr_range();
-    t07_pid_recorded             (managed, dev);
     t08_same_page_single_entry   (managed, dev);
     t09_range_inside             (managed, dev);
     t10_range_outside            (managed, dev);

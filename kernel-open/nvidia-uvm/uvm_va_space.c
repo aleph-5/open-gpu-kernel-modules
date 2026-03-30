@@ -547,8 +547,8 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     nv_kthread_q_flush(&g_uvm_global.global_q);
 
     // EDIT BY ADITI KHANDELIA
-    if (uvm_dirty_tracking_active_for_pid(va_space->owner_tgid)) {
-        uvm_dirty_page_table_destroy(va_space->owner_tgid, false);
+    if (uvm_dirty_tracking_active()) {
+        uvm_dirty_page_table_destroy(false);
     }
     // END OF EDIT
 

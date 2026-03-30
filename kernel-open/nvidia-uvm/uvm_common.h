@@ -47,25 +47,23 @@
 struct dirty_page_info {
     unsigned long page_number;
 	unsigned long timestamp;
-	// EDIT BY VIDHI JAIN
-	pid_t pid;
-	// END OF EDIT
 };
 
 struct uvm_dirty_page_table {
-    pid_t pid;
+    bool active;
+    pid_t owner_tgid;
     struct xarray pages;
 };
 
-bool uvm_dirty_tracking_active_for_pid(pid_t pid);
+bool uvm_dirty_tracking_active(void);
 
 NV_STATUS uvm_dirty_page_table_init(pid_t pid);
 
-NV_STATUS uvm_dirty_page_table_destroy(pid_t pid, bool locked);
+NV_STATUS uvm_dirty_page_table_destroy(bool locked);
 
-NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp, pid_t pid);
+NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp);
 
-struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, pid_t pid, bool locked);
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, bool locked);
 // END OF EDIT
 
 // EDIT BY ARUSH

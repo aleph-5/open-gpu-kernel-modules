@@ -3,7 +3,7 @@
  *
  * The dirty_range filter is a pair of global variables
  * (dirty_query_start / dirty_query_end) that live independently of the
- * per-pid xarray table.  The recording path (uvm_dirty_page_table_record,
+ * global xarray table.  The recording path (uvm_dirty_page_table_record,
  * called from the GPU fault handler) has no knowledge of dirty_range -
  * it always inserts unconditionally if the page is not already present.
  * The filter is applied only at read time inside nv_procfs_read_dirty_pages.
@@ -35,9 +35,8 @@
 #include <pthread.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -58,7 +57,7 @@
     }                                                                        \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void write_range(int *base, int page_start, int page_end) {
     int pg = blockIdx.x + page_start;
@@ -93,23 +92,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range(unsigned long s, unsigned long e) {
     char b[64];
@@ -132,7 +123,7 @@ static int read_dirty(entry_t *out, int max) {
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -162,8 +153,9 @@ int main(void) {
     memset(managed, 0, (size_t)NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    unsigned long base = (unsigned long)managed;
     pid_t pid = getpid();
+
+    unsigned long base = (unsigned long)managed;
     printf("[tc05] pid=%d  base=0x%lx\n", pid, base);
     printf("[tc05] first_half=[0x%lx, 0x%lx)  second_half=[0x%lx, 0x%lx)\n",
            base,
@@ -171,14 +163,12 @@ int main(void) {
            base + (unsigned long)HALF_PAGES * PAGE_SIZE,
            base + (unsigned long)NUM_PAGES  * PAGE_SIZE);
 
-    set_query_pid(pid);
-
     /* Step 1: set filter to FIRST HALF before start_track. */
     set_range(base, base + (unsigned long)HALF_PAGES * PAGE_SIZE);
     printf("[tc05] dirty_range set to first half BEFORE start_track\n");
 
     /* Step 2: start tracking (table init + GPU PTE invalidation). */
-    start_track(pid);
+    start_track();
     printf("[tc05] start_track issued\n");
 
     /* Step 3: write ALL pages concurrently - both halves. */
@@ -213,7 +203,7 @@ int main(void) {
     printf("[tc05] readB (range=all):        total=%d  first_half=%d (want %d)  second_half=%d\n",
            nB, fh_B, HALF_PAGES, sh_B);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

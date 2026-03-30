@@ -5,9 +5,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -25,7 +24,7 @@
     }                                                                       \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void gpu_write_all(int *data, int n) {
     for (int i = 0; i < n; i++) data[i] = i + 7;
@@ -38,23 +37,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range_full(void) {
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
@@ -71,7 +62,7 @@ static int read_pages(entry_t *out, int max) {
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -90,9 +81,8 @@ int main(void) {
 
     pid_t pid = getpid();
     printf("[tc04] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
-    set_query_pid(pid);
 
-    start_track(pid);
+    start_track();
 
     /* query immediately - no GPU writes yet */
     entry_t pre[MAX_ENTRIES];
@@ -109,7 +99,7 @@ int main(void) {
     int n_post = read_pages(post, MAX_ENTRIES);
     printf("[tc04] post-write query: %d entries (expected %d)\n", n_post, NUM_PAGES);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
 
     /* n_pre==0  -> table is active but empty (correct)

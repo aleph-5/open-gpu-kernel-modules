@@ -9,9 +9,8 @@
 #define MAX_PAGES   16384
 #define ITERATIONS  100
 
-#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY_PID "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_DIRTY_PAGES "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE     "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -28,15 +27,14 @@ static const int PAGE_COUNTS[] = {64, 256, 1024, 4096, 16384};
         }                                                                   \
     } while (0)
 
-static void write_pid_to_procfs(const char *path, pid_t pid)
+static void write_str_to_procfs(const char *path, const char *val)
 {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%d", (int)pid);
     int fd = open(path, O_WRONLY);
     if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, buf, n) != n) { perror("write procfs"); close(fd); exit(1); }
+    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
     close(fd);
 }
+
 
 static void write_range_to_procfs(const char *path, unsigned long start, unsigned long end)
 {
@@ -48,15 +46,13 @@ static void write_range_to_procfs(const char *path, unsigned long start, unsigne
     close(fd);
 }
 
-static void start_tracking(pid_t pid) { write_pid_to_procfs(PROCFS_START, pid); }
-static void stop_tracking(pid_t pid)  { write_pid_to_procfs(PROCFS_STOP,  pid); }
+static void start_tracking(void) { write_str_to_procfs(PROCFS_START, "start\n"); }
+static void stop_tracking(void) { write_str_to_procfs(PROCFS_STOP, "stop\n"); }
 
-static int count_recorded_pages(pid_t pid, volatile char *buf, size_t size)
+static int count_recorded_pages(volatile char *buf, size_t size)
 {
     char line[256];
     int count = 0;
-
-    write_pid_to_procfs(PROCFS_QUERY_PID, pid);
     write_range_to_procfs(PROCFS_RANGE,
                           (unsigned long)buf,
                           (unsigned long)buf + size);
@@ -122,7 +118,7 @@ int main(void)
         double sum_first = 0.0, sum_dup = 0.0;
 
         for (int iter = 0; iter < ITERATIONS; iter++) {
-            start_tracking(pid);
+            start_tracking();
             CUDA_CHECK(cudaDeviceSynchronize());
 
             CUDA_CHECK(cudaEventRecord(ev_start));
@@ -132,7 +128,7 @@ int main(void)
             float first_ms;
             CUDA_CHECK(cudaEventElapsedTime(&first_ms, ev_start, ev_stop));
 
-            int first_recorded = count_recorded_pages(pid, buf, (size_t)n * PAGE_SIZE);
+            int first_recorded = count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
             if (first_recorded != n)
                 fprintf(stderr, "iter %d (n=%d): expected %d after first fault, got %d\n", iter, n, n, first_recorded);
 
@@ -148,13 +144,13 @@ int main(void)
             float dup_ms;
             CUDA_CHECK(cudaEventElapsedTime(&dup_ms, ev_start, ev_stop));
 
-            int dup_recorded = count_recorded_pages(pid, buf, (size_t)n * PAGE_SIZE);
+            int dup_recorded = count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
             if (dup_recorded != first_recorded)
                 fprintf(stderr,
                         "iter %d (n=%d): recorded count changed after duplicate fault: %d -> %d\n",
                         iter, n, first_recorded, dup_recorded);
 
-            stop_tracking(pid);
+            stop_tracking();
 
             fprintf(csv, "%d,%d,%.6f,%.6f,%d,%d\n",
                     n, iter, first_ms, dup_ms, first_recorded, dup_recorded);

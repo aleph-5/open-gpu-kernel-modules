@@ -5,9 +5,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -25,7 +24,7 @@
     }                                                                       \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void gpu_write_all(int *data, int n) {
     for (int i = 0; i < n; i++) data[i] = i + 42;
@@ -40,23 +39,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range_full(void) {
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
@@ -75,7 +66,7 @@ static int read_pages(entry_t *out, int max) {
             }
             continue;
         }
-        if (n < max && sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3) n++;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2) n++;
     }
     fclose(f);
     return n;
@@ -94,14 +85,13 @@ int main(void) {
     pid_t pid = getpid();
     printf("[tc01] pid=%d  alloc=0x%lx  pages=%d\n",
            pid, (unsigned long)managed, NUM_PAGES);
-    set_query_pid(pid);
 
     /* write ALL pages before the tracker is started */
     gpu_write_all<<<1, 256>>>(managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc01] pre-start writes complete\n");
 
-    start_track(pid);
+    start_track();
     printf("[tc01] start_track issued\n");
 
     entry_t e[MAX_ENTRIES];
@@ -109,10 +99,10 @@ int main(void) {
     int n = read_pages(e, MAX_ENTRIES);
     printf("[tc01] dirty_pages returned %d entries (expected 0)\n", n);
     for (int i = 0; i < n && i < 8; i++)
-        printf("[tc01]   entry %d: addr=0x%lx ts=%lu pid=%d\n",
-               i, e[i].addr, e[i].ts, e[i].pid);
+        printf("[tc01]   entry %d: addr=0x%lx ts=%lu\n",
+               i, e[i].addr, e[i].ts);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n != 0);

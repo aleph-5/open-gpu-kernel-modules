@@ -1594,17 +1594,12 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
 		NvU64 fault_addr = va_block->start + ((NvU64)page_index << PAGE_SHIFT);
 
         // EDIT BY ADITI KHANDELIA
-    //     printk(KERN_INFO "uvm_dirty: creator_pid=%d active=%d access_type=%d\n",
-    //    va_block->creator_pid,
-    //    (int)uvm_dirty_tracking_active_for_pid(va_block->creator_pid),
-    //    service_access_type);
 
-        if (uvm_dirty_tracking_active_for_pid(va_block->creator_pid) && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
+        if (uvm_dirty_tracking_active() && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
 
             // EDIT BY VIDHI JAIN
-            pid_t pid = va_block->creator_pid;
-            uvm_dirty_page_table_record(page_number, ktime_get_ns(), pid);
+            uvm_dirty_page_table_record(page_number, ktime_get_ns());
             // END OF EDIT
 
         }

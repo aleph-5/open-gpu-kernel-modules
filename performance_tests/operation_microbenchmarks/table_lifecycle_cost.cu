@@ -14,9 +14,8 @@
 static const int PAGE_COUNTS[] = {64, 256, 1024, 4096, 16384};
 #define NUM_PAGE_COUNTS (int)(sizeof(PAGE_COUNTS) / sizeof(PAGE_COUNTS[0]))
 
-#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY_PID "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_RANGE     "/proc/driver/nvidia-uvm/dirty_range"
 #define PROCFS_DIRTY     "/proc/driver/nvidia-uvm/dirty_pages"
 
@@ -30,44 +29,21 @@ static const int PAGE_COUNTS[] = {64, 256, 1024, 4096, 16384};
         }                                                                   \
     } while (0)
 
-static void write_pid_to_procfs(const char *path, pid_t pid)
+static void write_str_to_procfs(const char *path, const char *val)
 {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%d", (int)pid);
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { 
-        perror(path); 
-        exit(1); 
-    }
-    if (write(fd, buf, n) != n) { 
-        perror("write procfs"); 
-        close(fd); 
-        exit(1); 
-    }
+    if (fd < 0) { perror(path); exit(1); }
+    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
     close(fd);
 }
 
 /* time a procfs write in microseconds using CLOCK_MONOTONIC */
-static double timed_write_pid(const char *path, pid_t pid)
+static double timed_write_str(const char *path, const char *val)
 {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%d", (int)pid);
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { 
-        perror(path); 
-        exit(1); 
-    }
-
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
-    if (write(fd, buf, n) != n) { 
-        perror("write procfs timed"); 
-        close(fd); 
-        exit(1); 
-    }
+    write_str_to_procfs(path, val);
     clock_gettime(CLOCK_MONOTONIC, &t1);
-    close(fd);
-
     return (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3;
 }
 
@@ -81,12 +57,11 @@ static void write_range_to_procfs(const char *path, unsigned long start, unsigne
     close(fd);
 }
 
-static int count_recorded_pages(pid_t pid, volatile char *buf, size_t size)
+static int count_recorded_pages(volatile char *buf, size_t size)
 {
     char line[256];
     int count = 0;
 
-    write_pid_to_procfs(PROCFS_QUERY_PID, pid);
     write_range_to_procfs(PROCFS_RANGE,
                           (unsigned long)buf,
                           (unsigned long)buf + size);
@@ -174,9 +149,9 @@ int main(void)
             CUDA_CHECK(cudaDeviceSynchronize());
 
             /* time start_track: inits empty xarray + invalidates N GPU PTEs */
-            double t = timed_write_pid(PROCFS_START, pid);
+            double t = timed_write_str(PROCFS_START, "start\n");
 
-            write_pid_to_procfs(PROCFS_STOP, pid);
+            write_str_to_procfs(PROCFS_STOP, "stop\n");
 
             fprintf(csv, "%d,%d,%.3f\n", n, iter, t);
             sum += t;
@@ -201,23 +176,23 @@ int main(void)
         double sum = 0.0;
 
         for (int iter = 0; iter < ITERATIONS; iter++) {
-            write_pid_to_procfs(PROCFS_START, pid);
+            write_str_to_procfs(PROCFS_START, "start\n");
 
             CUDA_CHECK(cudaDeviceSynchronize());
             touch_pages<<<1, FAULT_CHUNK>>>(buf, n);
             CUDA_CHECK(cudaDeviceSynchronize());
 
-            int recorded = count_recorded_pages(pid, buf, (size_t)n * PAGE_SIZE);
+            int recorded = count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
             if (recorded != n) {
                 fprintf(stderr,
                         "iter %d: expected %d recorded pages, got %d - skipping\n",
                         iter, n, recorded);
-                write_pid_to_procfs(PROCFS_STOP, pid);
+                write_str_to_procfs(PROCFS_STOP, "stop\n");
                 continue;
             }
 
             /* time stop_track: walks and frees N xarray entries */
-            double t = timed_write_pid(PROCFS_STOP, pid);
+            double t = timed_write_str(PROCFS_STOP, "stop\n");
 
             fprintf(csv2, "%d,%d,%d,%.3f\n", n, iter, recorded, t);
             sum += t;
@@ -250,26 +225,26 @@ int main(void)
             double sum = 0.0;
 
             for (int iter = 0; iter < ITERATIONS; iter++) {
-                write_pid_to_procfs(PROCFS_START, pid);
+                write_str_to_procfs(PROCFS_START, "start\n");
 
                 CUDA_CHECK(cudaDeviceSynchronize());
                 touch_pages<<<1, FAULT_CHUNK>>>(write_buf, n);
                 read_pages<<<1, FAULT_CHUNK>>>(read_buf, m);
                 CUDA_CHECK(cudaDeviceSynchronize());
 
-                int recorded = count_recorded_pages(pid, write_buf,
+                int recorded = count_recorded_pages(write_buf,
                                                     (size_t)n * PAGE_SIZE);
                 if (recorded != n) {
                     fprintf(stderr,
                             "reinit iter %d (n=%d m=%d): expected %d got %d - skipping\n",
                             iter, n, m, n, recorded);
-                    write_pid_to_procfs(PROCFS_STOP, pid);
+                    write_str_to_procfs(PROCFS_STOP, "stop\n");
                     continue;
                 }
 
                 /* time reinit: destroys N xarray entries + invalidates
                  * N write PTEs (write_buf) + M read PTEs (read_buf) */
-                double t = timed_write_pid(PROCFS_START, pid);
+                double t = timed_write_str(PROCFS_START, "start\n");
 
                 fprintf(csv3, "%d,%d,%d,%d,%.3f\n", n, m, iter, recorded, t);
                 sum += t;

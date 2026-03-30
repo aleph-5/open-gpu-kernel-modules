@@ -5,9 +5,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -26,7 +25,7 @@
     }                                                                       \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void gpu_write_range(int *base, int start_page, int npages) {
     int ipp = PAGE_SIZE / sizeof(int);
@@ -42,23 +41,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range_full(void) {
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
@@ -75,7 +66,7 @@ static int read_pages(entry_t *out, int max) {
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -105,14 +96,13 @@ int main(void) {
 
     pid_t pid = getpid();
     printf("[tc05] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
-    set_query_pid(pid);
 
     /* ---- epoch 1: write first half ---- */
-    start_track(pid);
+    start_track();
     gpu_write_range<<<1, 32>>>(managed, 0, HALF_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc05] epoch 1: wrote pages 0..%d\n", HALF_PAGES - 1);
-    stop_track(pid);
+    stop_track();
     printf("[tc05] epoch 1: stopped\n");
 
     /* touch second half now - tracking is OFF, these must not appear in epoch 2 */
@@ -122,7 +112,7 @@ int main(void) {
            HALF_PAGES, NUM_PAGES - 1);
 
     /* ---- epoch 2: write second half under fresh table ---- */
-    start_track(pid);
+    start_track();
     gpu_write_range<<<1, 32>>>(managed, HALF_PAGES, HALF_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
     printf("[tc05] epoch 2: wrote pages %d..%d\n", HALF_PAGES, NUM_PAGES - 1);
@@ -139,10 +129,10 @@ int main(void) {
            epoch2_present, HALF_PAGES, HALF_PAGES);
 
     for (int i = 0; i < n; i++)
-        printf("[tc05]   [%d] addr=0x%lx ts=%lu pid=%d\n",
-               i, e[i].addr, e[i].ts, e[i].pid);
+        printf("[tc05]   [%d] addr=0x%lx ts=%lu\n",
+               i, e[i].addr, e[i].ts);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n < 0 || epoch1_present != 0 || epoch2_present != HALF_PAGES);

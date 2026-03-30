@@ -37,9 +37,8 @@
 #include <pthread.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -59,7 +58,7 @@
     }                                                                        \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void write_range(int *base, 
     int page_start, 
@@ -97,23 +96,15 @@ static void procfs_write(const char *path,
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 /*
  * Write the range directly as hex pairs.  The kernel sscanf uses %lx which
@@ -145,7 +136,7 @@ static int read_dirty(entry_t *out,
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -178,13 +169,12 @@ int main(void) {
     memset(managed, 0, (size_t)NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    unsigned long base = (unsigned long)managed;
     pid_t pid = getpid();
-    printf("[tc04] pid=%d  base=0x%lx  pages=%d\n", pid, base, NUM_PAGES);
 
-    set_query_pid(pid);
+    unsigned long base = (unsigned long)managed;
+    printf("[tc04] pid=%d  base=0x%lx  pages=%d\n", pid, base, NUM_PAGES);
     reset_range();
-    start_track(pid);
+    start_track();
 
     /* All four threads write concurrently; all 16 pages land in the xarray. */
     thread_arg_t args[NUM_THREADS];
@@ -209,7 +199,7 @@ int main(void) {
     printf("[tc04] sanity (range=all): %d/%d pages recorded\n", recorded, NUM_PAGES);
     if (recorded != NUM_PAGES) {
         printf("[tc04] FAIL: not all pages recorded before filter tests (got %d)\n", recorded);
-        stop_track(pid);
+        stop_track();
         CUDA_CHECK(cudaFree(managed));
         free(e);
         return 1;
@@ -261,7 +251,7 @@ int main(void) {
         printf("[tc04] FAIL caseC: expected 0 pages (kernel should reject end=0), got %d\n", cC); failed = 1;
     }
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
     free(e);
 

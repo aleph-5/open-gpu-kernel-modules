@@ -13,9 +13,8 @@
 #define ITERATIONS      100
 #define FAULT_CHUNK     64
 
-#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY_PID "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_DIRTY     "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE     "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -35,22 +34,14 @@ static const int PAGE_COUNTS[] = {64, 256, 1024, 4096};
         }                                                                   \
     } while (0)
 
-static void write_pid_to_procfs(const char *path, pid_t pid)
+static void write_str_to_procfs(const char *path, const char *val)
 {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%d", (int)pid);
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { 
-        perror(path); 
-        exit(1); 
-    }
-    if (write(fd, buf, n) != n) { 
-        perror("write procfs"); 
-        close(fd); 
-        exit(1); 
-    }
+    if (fd < 0) { perror(path); exit(1); }
+    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
     close(fd);
 }
+
 
 static void write_range_to_procfs(const char *path, unsigned long start, unsigned long end)
 {
@@ -69,15 +60,13 @@ static void write_range_to_procfs(const char *path, unsigned long start, unsigne
     close(fd);
 }
 
-static void start_tracking(pid_t pid) { write_pid_to_procfs(PROCFS_START, pid); }
-static void stop_tracking(pid_t pid)  { write_pid_to_procfs(PROCFS_STOP,  pid); }
+static void start_tracking(void) { write_str_to_procfs(PROCFS_START, "start\n"); }
+static void stop_tracking(void) { write_str_to_procfs(PROCFS_STOP, "stop\n"); }
 
-static int count_recorded_pages(pid_t pid, volatile char *buf, size_t size)
+static int count_recorded_pages(volatile char *buf, size_t size)
 {
     char line[256];
     int count = 0;
-
-    write_pid_to_procfs(PROCFS_QUERY_PID, pid);
     write_range_to_procfs(PROCFS_RANGE, (unsigned long)buf, (unsigned long)buf + size);
 
     FILE *fp = fopen(PROCFS_DIRTY, "r");
@@ -152,7 +141,7 @@ int main(void)
             struct timespec t0, t1;
 
             for (int iter = 0; iter < ITERATIONS; iter++) {
-                start_tracking(pid);
+                start_tracking();
                 CUDA_CHECK(cudaDeviceSynchronize());
 
                 clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -163,11 +152,11 @@ int main(void)
 
                 double t = elapsed_us(&t0, &t1);
 
-                int recorded = count_recorded_pages(pid, buf, (size_t)S * n * PAGE_SIZE);
+                int recorded = count_recorded_pages(buf, (size_t)S * n * PAGE_SIZE);
                 if (recorded != S * n)
                     fprintf(stderr, "disjoint iter %d (S=%d n=%d): expected %d got %d\n", iter, S, n, S * n, recorded);
 
-                stop_tracking(pid);
+                stop_tracking();
 
                 fprintf(csv, "disjoint,%d,%d,%d,%.3f,%d\n", S, n, iter, t, recorded);
                 sum += t;
@@ -190,7 +179,7 @@ int main(void)
             struct timespec t0, t1;
 
             for (int iter = 0; iter < ITERATIONS; iter++) {
-                start_tracking(pid);
+                start_tracking();
                 CUDA_CHECK(cudaDeviceSynchronize());
 
                 clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -201,11 +190,11 @@ int main(void)
 
                 double t = elapsed_us(&t0, &t1);
 
-                int recorded = count_recorded_pages(pid, buf, (size_t)n * PAGE_SIZE);
+                int recorded = count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
                 if (recorded != n)
                     fprintf(stderr, "hot set iter %d (S=%d n=%d): expected %d got %d\n", iter, S, n, n, recorded);
 
-                stop_tracking(pid);
+                stop_tracking();
 
                 fprintf(csv, "hot_set,%d,%d,%d,%.3f,%d\n", S, n, iter, t, recorded);
                 sum += t;

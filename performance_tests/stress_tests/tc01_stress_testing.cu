@@ -6,9 +6,8 @@
 #include <unistd.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -73,9 +72,6 @@ int main(int argc, char **argv)
     size_t buf_size = (size_t)n_pages * PAGE_SIZE_BYTES;
     printf("[tc01] %ld pages (%.1f MB)\n", n_pages, buf_size / 1e6);
 
-    char pid_str[32];
-    snprintf(pid_str, sizeof(pid_str), "%d\n", getpid());
-
     char *buf;
     CUDA_CHECK(cudaMallocManaged(&buf, buf_size));
     memset(buf, 0, buf_size);
@@ -83,8 +79,6 @@ int main(int argc, char **argv)
 
     int threads = 256;
     int blocks  = (n_pages + threads - 1) / threads;
-
-    procfs_write(PROCFS_QUERY, pid_str);
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
 
     // warmup: bring pages to GPU
@@ -103,7 +97,7 @@ int main(int argc, char **argv)
     // tracked: start_track invalidates PTEs, next access generates faults
     struct timespec ti0, ti1;
     clock_gettime(CLOCK_MONOTONIC, &ti0);
-    procfs_write(PROCFS_START, pid_str);
+    procfs_write(PROCFS_START, "start\n");
     clock_gettime(CLOCK_MONOTONIC, &ti1);
     printf("[tc01] invalidate: %.3f ms\n", ns_elapsed(&ti0, &ti1) / 1e6);
 
@@ -115,7 +109,7 @@ int main(int argc, char **argv)
     long tracked_ns = ns_elapsed(&t2, &t3);
 
     long recorded = count_dirty_pages();
-    procfs_write(PROCFS_STOP, pid_str);
+    procfs_write(PROCFS_STOP, "stop\n");
 
     printf("[tc01] tracked   : %.3f ms\n", tracked_ns / 1e6);
     printf("[tc01] overhead  : %.3f ms  (%.1f%%)\n",

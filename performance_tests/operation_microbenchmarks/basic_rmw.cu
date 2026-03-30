@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <cuda_runtime.h>
@@ -9,8 +10,8 @@
 #define ALLOC_SIZE ((size_t)NUM_PAGES * PAGE_SIZE)
 #define NUM_ITERS (100)
 
-#define PROCFS_START "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP  "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
+#define PROCFS_START "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP  "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 
 #define CUDA_CHECK(call)                                                    \
     do {                                                                    \
@@ -22,15 +23,14 @@
         }                                                                   \
     } while (0)
 
-static void write_pid_to_procfs(const char *path, pid_t pid)
+static void write_str_to_procfs(const char *path, const char *val)
 {
-    char buf[32];
-    int n = snprintf(buf, sizeof(buf), "%d", (int)pid);
     int fd = open(path, O_WRONLY);
     if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, buf, n) != n) { perror("write procfs"); close(fd); exit(1); }
+    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
     close(fd);
 }
+
 
 /* Read-modify-write: each thread reads a value, adds its index, writes it back */
 __global__ void rmw_kernel(int *buf, int n)
@@ -53,7 +53,7 @@ int main(void)
         buf[i] = (int)i;
 
     /* Start dirty tracking */
-    // write_pid_to_procfs(PROCFS_START, pid);
+    // write_str_to_procfs(PROCFS_START, "start\n");
     // printf("tracking started\n");
 
     /* Launch RMW kernel */
@@ -61,15 +61,13 @@ int main(void)
     int threads  = 256;
     int blocks   = (num_ints + threads - 1) / threads;
     for (int i = 0; i < NUM_ITERS; i++){
-        write_pid_to_procfs(PROCFS_START, pid);
         rmw_kernel<<<blocks, threads>>>(buf, num_ints);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
-    write_pid_to_procfs(PROCFS_STOP, pid);
     // printf("rmw kernel done\n");
 
     /* Stop dirty tracking */
-    // write_pid_to_procfs(PROCFS_STOP, pid);
+    // write_str_to_procfs(PROCFS_STOP, "stop\n");
     // printf("tracking stopped\n");
 
     CUDA_CHECK(cudaFree(buf));

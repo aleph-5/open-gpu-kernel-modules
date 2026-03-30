@@ -5,9 +5,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -24,7 +23,7 @@
     }                                                                       \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void gpu_write_range(int *base, int start_page, int end_page) {
     int ipp = PAGE_SIZE / sizeof(int);
@@ -40,23 +39,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range_full(void) {
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
@@ -73,7 +64,7 @@ static int read_pages(entry_t *out, int max) {
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -103,9 +94,8 @@ int main(void) {
 
     pid_t pid = getpid();
     printf("[tc03] pid=%d  alloc=0x%lx\n", pid, (unsigned long)managed);
-    set_query_pid(pid);
 
-    start_track(pid);
+    start_track();
 
     /* round 1: write first half */
     gpu_write_range<<<1, 32>>>(managed, 0, half);
@@ -133,7 +123,7 @@ int main(void) {
     printf("[tc03] snap2: %d entries  round1=%d/%d  round2=%d/%d (expect %d,%d)\n",
            n2, r1_in_snap2, half, r2_in_snap2, half, half, half);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
 
     /* snap1 must have round-1 pages but not round-2 (not yet written)

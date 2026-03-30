@@ -5,9 +5,8 @@
 #include <fcntl.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -41,7 +40,7 @@
     }                                                                       \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void write_sentinel(int *page) {
     int ipp = PAGE_SIZE / sizeof(int);
@@ -63,23 +62,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range_full(void) {
     procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
@@ -96,7 +87,7 @@ static int read_pages(entry_t *out, int max) {
             continue;
         }
         if (n < max &&
-            sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -116,18 +107,17 @@ int main(void) {
     memset(managed, 0, (size_t)TOTAL_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    pid_t pid = getpid();
+
     int *sentinel_page = managed;
     int *flood_base    = managed + INTS_PER_PAGE;
 
     unsigned long sentinel_va = (unsigned long)sentinel_page;
     unsigned long flood_va    = (unsigned long)flood_base;
-
-    pid_t pid = getpid();
     printf("[tc07] pid=%d  sentinel=0x%lx  flood_base=0x%lx\n",
            pid, sentinel_va, flood_va);
-    set_query_pid(pid);
 
-    start_track(pid);
+    start_track();
 
     /* step 1: sentinel */
     write_sentinel<<<1, 1>>>(sentinel_page);
@@ -176,7 +166,7 @@ int main(void) {
     printf("[tc07] flood_missing=%d  ordering_violations=%d\n",
            flood_missing, early_violations);
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
     free(e2);
 

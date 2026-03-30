@@ -42,9 +42,8 @@
 #include <pthread.h>
 #include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_pids_start_track"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_pids_stop_track"
-#define PROCFS_QUERY  "/proc/driver/nvidia-uvm/dirty_pid_to_query"
+#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
 #define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
 #define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
 
@@ -64,7 +63,7 @@
     }                                                                        \
 } while (0)
 
-typedef struct { unsigned long addr, ts; int pid; } entry_t;
+typedef struct { unsigned long addr, ts; } entry_t;
 
 __global__ void write_range(int *base, int page_start, int page_end) {
     int pg = blockIdx.x + page_start;
@@ -102,23 +101,15 @@ static void procfs_write(const char *path, const char *val) {
     close(fd);
 }
 
-static void set_query_pid(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_QUERY, b);
+static void start_track(void) {
+    procfs_write(PROCFS_START, "start\n");
 }
 
-static void start_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_START, b);
+
+static void stop_track(void) {
+    procfs_write(PROCFS_STOP, "stop\n");
 }
 
-static void stop_track(pid_t p) {
-    char b[32];
-    snprintf(b, sizeof(b), "%d\n", p);
-    procfs_write(PROCFS_STOP, b);
-}
 
 static void set_range(unsigned long s, unsigned long e) {
     char b[64];
@@ -143,7 +134,7 @@ static int read_dirty(entry_t *out, int max) {
             }
             continue;
         }
-        if (n < max && sscanf(line, "0x%lx %lu %d", &out[n].addr, &out[n].ts, &out[n].pid) == 3)
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
     fclose(f);
@@ -174,15 +165,14 @@ int main(void) {
     memset(managed, 0, (size_t)NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    unsigned long base = (unsigned long)managed;
     pid_t pid = getpid();
+
+    unsigned long base = (unsigned long)managed;
     printf("[tc03] pid=%d  base=0x%lx\n", pid, base);
     printf("[tc03] PAGE_SIZE=%d  PAGE_SHIFT=12\n", PAGE_SIZE);
     printf("[tc03] subpage offset used: PAGE_SIZE/2 = %d bytes\n", PAGE_SIZE / 2);
-
-    set_query_pid(pid);
     reset_range();
-    start_track(pid);
+    start_track();
 
     thread_arg_t args[NUM_THREADS];
     pthread_t threads[NUM_THREADS];
@@ -259,7 +249,7 @@ int main(void) {
         }
     }
 
-    stop_track(pid);
+    stop_track();
     CUDA_CHECK(cudaFree(managed));
     free(e);
 
