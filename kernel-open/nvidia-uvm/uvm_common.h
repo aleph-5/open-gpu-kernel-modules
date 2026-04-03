@@ -57,6 +57,10 @@ struct uvm_dirty_page_table {
 
 bool uvm_dirty_tracking_active(void);
 
+NV_STATUS uvm_dirty_set_tracking_active(bool active);
+
+pid_t uvm_owner_tgid_with_dirty_tracking_active(void);
+
 NV_STATUS uvm_dirty_page_table_init(pid_t pid);
 
 NV_STATUS uvm_dirty_page_table_destroy(bool locked);
@@ -68,7 +72,9 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, b
 
 // EDIT BY ARUSH
 // Function pointer registered by uvm_va_space.c at module init.  
-extern void (*uvm_dirty_invalidate_fn)(void);
+extern NV_STATUS(*uvm_dirty_invalidate_fn)(void);
+extern NV_STATUS(*uvm_dirty_activate_now_fn)(void);
+extern NV_STATUS(*uvm_dirty_barrier_end_fn)(void);
 // END OF EDIT
 
 #if defined(CONFIG_PROC_FS) 

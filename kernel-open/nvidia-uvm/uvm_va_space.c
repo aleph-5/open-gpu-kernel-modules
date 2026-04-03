@@ -547,7 +547,7 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     nv_kthread_q_flush(&g_uvm_global.global_q);
 
     // EDIT BY ADITI KHANDELIA
-    if (uvm_dirty_tracking_active()) {
+    if (uvm_dirty_tracking_active() && uvm_owner_tgid_with_dirty_tracking_active() == va_space->owner_tgid) {
         uvm_dirty_page_table_destroy(false);
     }
     // END OF EDIT
@@ -2812,56 +2812,144 @@ static void uvm_dirty_invalidate_all_gpu_mappings(void)
 }
 
 // EDIT BY SANKALP MITTAL
-static void uvm_dirty_downgrade_all_permissions(void)
+// EDIT BY ADITI KHANDELIA
+typedef struct
+{
+    uvm_va_space_t *owner_va_space;
+    uvm_va_block_context_t *block_ctx;
+    bool begin_done;
+} uvm_dirty_barrier_ctx_t;
+
+static uvm_dirty_barrier_ctx_t g_uvm_dirty_barrier_ctx;
+
+static NV_STATUS uvm_dirty_barrier_begin(pid_t owner_tgid,
+    uvm_dirty_barrier_ctx_t *ctx,
+    uvm_va_block_context_t *block_ctx)
 {
     uvm_va_space_t *va_space;
+    int owner_count = 0;
+
+    uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
+    ctx->owner_va_space = NULL;
+    ctx->block_ctx = block_ctx;
+
+    list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
+        if (va_space->owner_tgid != owner_tgid)
+            continue;
+
+        ctx->owner_va_space = va_space;
+        ++owner_count;
+    }
+
+    if (owner_count != 1) {
+        ctx->owner_va_space = NULL;
+        ctx->block_ctx = NULL;
+        ctx->begin_done = false;
+        uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+        return NV_ERR_GENERIC;
+    }
+
+    ctx->begin_done = true;
+    return NV_OK;
+}
+
+static NV_STATUS uvm_dirty_barrier_end(void)
+{
+    uvm_dirty_barrier_ctx_t *ctx = &g_uvm_dirty_barrier_ctx;
+
+    if (ctx->begin_done) {
+        if(ctx->owner_va_space) {
+            uvm_va_space_up_write(ctx->owner_va_space);
+        }
+        uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+        ctx->owner_va_space = NULL;
+        ctx->block_ctx = NULL;
+        ctx->begin_done = false;
+    }
+
+    return NV_OK;
+}
+
+static NV_STATUS uvm_dirty_activate_now(void)
+{
+    return uvm_dirty_set_tracking_active(true);
+}
+
+static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
+{
+    pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_active();
+    uvm_va_space_t *va_space = NULL;
     uvm_va_range_t *va_range;
-    uvm_va_block_t *va_block;
-    uvm_va_block_context_t *block_ctx;
+    uvm_va_block_t *va_block = NULL;
+    uvm_va_block_context_t *block_ctx = NULL;
+    NV_STATUS status = NV_OK;
+    NV_STATUS cleanup_status;
+    bool va_block_lock_held = false;
+
+    if (owner_tgid == -1) {
+        printk(KERN_ERR "uvm_dirty: no owner with active dirty tracking found, skipping GPU permissions downgrade\n");
+        status = NV_ERR_GENERIC;
+        goto out;
+    }
 
     block_ctx = uvm_va_block_context_alloc(NULL);
     if (!block_ctx) {
-        // printk(KERN_ERR "uvm_dirty: failed to alloc block_ctx for GPU unmap\n");
-        return;
+        status = NV_ERR_NO_MEMORY;
+        goto out;
     }
 
-    uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
+    status = uvm_dirty_barrier_begin(owner_tgid, &g_uvm_dirty_barrier_ctx, block_ctx);
+    if (status != NV_OK)
+        goto out;
 
-    list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
-        uvm_va_space_down_read(va_space);
+    va_space = g_uvm_dirty_barrier_ctx.owner_va_space;
+    uvm_va_space_down_write(va_space);
 
-        uvm_for_each_va_range(va_range, va_space) {
-            uvm_va_range_managed_t *managed;
-            uvm_processor_mask_t gpu_mask;
+    uvm_for_each_va_range(va_range, va_space) {
+        uvm_va_range_managed_t *managed;
+        uvm_processor_mask_t gpu_mask;
 
-            if (va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
-                continue;
+        if (va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
+            continue;
 
-            managed = uvm_va_range_to_managed(va_range);
+        managed = uvm_va_range_to_managed(va_range);
 
-            for_each_va_block_in_va_range(managed, va_block) {
-                uvm_mutex_lock(&va_block->lock);
+        for_each_va_block_in_va_range(managed, va_block) {
+            uvm_mutex_lock(&va_block->lock);
+            va_block_lock_held = true;
 
-                uvm_processor_mask_copy(&gpu_mask, &va_block->mapped);
-                uvm_processor_mask_clear(&gpu_mask, UVM_ID_CPU);
+            uvm_processor_mask_copy(&gpu_mask, &va_block->mapped);
+            uvm_processor_mask_clear(&gpu_mask, UVM_ID_CPU);
 
-                if (!uvm_processor_mask_empty(&gpu_mask)) {
-                    uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
-                    uvm_va_block_revoke_prot_mask(va_block, block_ctx, &gpu_mask, region, NULL, UVM_PROT_READ_WRITE);
-                    uvm_tracker_wait(&va_block->tracker);
-                }
-
-                uvm_mutex_unlock(&va_block->lock);
+            if (!uvm_processor_mask_empty(&gpu_mask)) {
+                uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
+                status = uvm_va_block_revoke_prot_mask(va_block, block_ctx, &gpu_mask, region, NULL, UVM_PROT_READ_WRITE);
+                if (status != NV_OK)
+                    goto out;
+                status = uvm_tracker_wait(&va_block->tracker);
+                if (status != NV_OK)
+                    goto out;
             }
-        }
 
-        uvm_va_space_up_read(va_space);
+            uvm_mutex_unlock(&va_block->lock);
+            va_block_lock_held = false;
+        }
     }
 
-    uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+out:
+    if (va_block_lock_held)
+        uvm_mutex_unlock(&va_block->lock);
 
-    uvm_va_block_context_free(block_ctx);
+    if (status != NV_OK) {
+        cleanup_status = uvm_dirty_barrier_end();
+    }
+
+    if (block_ctx)
+        uvm_va_block_context_free(block_ctx);
+
+    return status;
 }
+// END OF EDIT
 // END OF EDIT
 
 
@@ -2871,5 +2959,7 @@ void uvm_va_space_dirty_init(void)
 {
     // uvm_dirty_invalidate_fn = uvm_dirty_invalidate_all_gpu_mappings;
     uvm_dirty_invalidate_fn = uvm_dirty_downgrade_all_permissions;
+    uvm_dirty_activate_now_fn = uvm_dirty_activate_now;
+    uvm_dirty_barrier_end_fn = uvm_dirty_barrier_end;
 }
 // END OF EDIT

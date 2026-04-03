@@ -36,17 +36,41 @@ static unsigned long dirty_query_end = ~0UL;
 
 // EDIT BY ARUSH
 // Registered from uvm_va_space.c at module init; NULL until then.
-void (*uvm_dirty_invalidate_fn)(void) = NULL;
+NV_STATUS (*uvm_dirty_invalidate_fn)(void) = NULL;
+NV_STATUS (*uvm_dirty_activate_now_fn)(void) = NULL;
+NV_STATUS (*uvm_dirty_barrier_end_fn)(void) = NULL;
 // END OF EDIT
 
 // EDIT BY ADITI KHANDELIA
 static DEFINE_MUTEX(uvm_dirty_page_table_lock);
 static struct uvm_dirty_page_table* g_uvm_dirty_page_table;
+static DEFINE_MUTEX(uvm_dirty_lifecycle_lock);
 static bool g_uvm_dirty_tracking_active;
 
 bool uvm_dirty_tracking_active(void)
 {
     return READ_ONCE(g_uvm_dirty_tracking_active);
+}
+
+NV_STATUS uvm_dirty_set_tracking_active(bool active)
+{
+    WRITE_ONCE(g_uvm_dirty_tracking_active, active);
+    return NV_OK;
+}
+
+pid_t uvm_owner_tgid_with_dirty_tracking_active(void)
+{
+    pid_t owner_tgid;
+
+    mutex_lock(&uvm_dirty_page_table_lock);
+    if (g_uvm_dirty_page_table != NULL) {
+        owner_tgid = g_uvm_dirty_page_table->owner_tgid;
+    } else {
+        owner_tgid = -1;
+    }
+    mutex_unlock(&uvm_dirty_page_table_lock);
+
+    return owner_tgid;
 }
 
 NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
@@ -68,8 +92,6 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
     xa_init(&g_uvm_dirty_page_table->pages);
     g_uvm_dirty_page_table->active = true;
     g_uvm_dirty_page_table->owner_tgid = pid;
-
-    WRITE_ONCE(g_uvm_dirty_tracking_active, true);
 
     mutex_unlock(&uvm_dirty_page_table_lock);
     return NV_OK;
@@ -256,20 +278,55 @@ static ssize_t dirty_tracking_start(struct file* file,
     size_t count,
     loff_t* ppos) {
 
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+
     char kbuf[6]; 
     size_t to_copy = min(count, sizeof(kbuf) - 1); // Safety in case of large input
-    if (copy_from_user(kbuf, buf, to_copy))
+    if (copy_from_user(kbuf, buf, to_copy)){
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
+    } 
     kbuf[to_copy] = '\0';
     char* start_string = "start";
     if (strncmp(kbuf, start_string, strlen(start_string)) != 0) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
 
-    uvm_dirty_page_table_init(current->tgid);
-    if (uvm_dirty_invalidate_fn) {
-        uvm_dirty_invalidate_fn();
+    NV_STATUS status;
+    status = uvm_dirty_page_table_init(current->tgid);
+    if (status != NV_OK) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
     }
+    if (!uvm_dirty_invalidate_fn || !uvm_dirty_activate_now_fn || !uvm_dirty_barrier_end_fn) {
+        uvm_dirty_page_table_destroy(false);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_invalidate_fn();
+    if (status != NV_OK) {
+        uvm_dirty_page_table_destroy(false);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_activate_now_fn();
+    if (status != NV_OK) {
+        uvm_dirty_barrier_end_fn();
+        uvm_dirty_page_table_destroy(false);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_barrier_end_fn();
+    if (status != NV_OK) {
+        uvm_dirty_page_table_destroy(false);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
     return count;
 }
 
@@ -282,17 +339,23 @@ static ssize_t dirty_tracking_stop(struct file* file,
     size_t count,
     loff_t* ppos) {
 
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+
     char kbuf[5];
     size_t to_copy = min(count, sizeof(kbuf) - 1);
-    if (copy_from_user(kbuf, buf, to_copy))
+    if (copy_from_user(kbuf, buf, to_copy)) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
+    }
     kbuf[to_copy] = '\0';
     char* stop_string = "stop";
     if (strncmp(kbuf, stop_string, strlen(stop_string)) != 0) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
 
     uvm_dirty_page_table_destroy(false);
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
     return count;
 }
 

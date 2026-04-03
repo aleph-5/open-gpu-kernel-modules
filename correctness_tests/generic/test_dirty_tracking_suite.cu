@@ -1,421 +1,657 @@
-/* test_dirty_tracking_suite.cu - UVM dirty page tracking tests
- * GROUP A: basic tracking  |  GROUP B: addr range filter
+/*
+ * test_dirty_tracking_suite.cu - generic dirty tracking suite
  *
- * Kernel interface:
- *   /proc/driver/nvidia-uvm/dirty_tracking_start - write "start" to begin tracking globally
- *       (inits/reinits table + invalidates GPU PTEs so subsequent faults are recorded fresh)
- *   /proc/driver/nvidia-uvm/dirty_tracking_stop  - write "stop" to stop tracking (destroys table)
- *   /proc/driver/nvidia-uvm/dirty_pages  - read dirty entries:
- *       "# dirty tracking not active" when disabled
- *       "0x<addr_hex> <timestamp_ns>"  one line per dirty page
- *   /proc/driver/nvidia-uvm/dirty_range - write "<start_hex> <end_hex>" to
- *       restrict which pages are returned on the next read; defaults to
- *       [0, ~0UL] (all pages).  Reset by writing "0x0 0xffffffffffffffff".
- *
+ * This suite validates base semantics (write tracking, reset behavior,
+ * disabled behavior) and dirty_range filtering behavior against procfs.
  */
 
+#include <cuda_runtime.h>
+
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <sys/stat.h>
-#include <cuda_runtime.h>
+#include <unistd.h>
 
-#define PROCFS_DIRTY_START "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_DIRTY_STOP  "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_DIRTY       "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_DIRTY_RANGE "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_PAGES "/proc/driver/nvidia-uvm/dirty_pages"
+#define PROCFS_RANGE "/proc/driver/nvidia-uvm/dirty_range"
 
-#define NUM_PAGES   8
-#define PAGE_SIZE   4096
-#define NUM_INTS    (NUM_PAGES * PAGE_SIZE / sizeof(int))
+#define NUM_PAGES 8
+#define PAGE_SIZE 4096
+#define INTS_PER_PAGE (PAGE_SIZE / sizeof(int))
+#define NUM_INTS (NUM_PAGES * INTS_PER_PAGE)
 #define MAX_ENTRIES 4096
 
-#define CUDA_CHECK(call) do {                                              \
-    cudaError_t _e = (call);                                               \
-    if (_e != cudaSuccess) {                                               \
-        fprintf(stderr, "CUDA error at %s:%d - %s\n",                      \
-                __FILE__, __LINE__, cudaGetErrorString(_e));               \
-        exit(1);                                                           \
-    }                                                                      \
-} while (0)
+#define CUDA_CHECK(c)                                                            \
+    do {                                                                         \
+        cudaError_t _e = (c);                                                    \
+        if (_e != cudaSuccess) {                                                 \
+            fprintf(stderr, "CUDA error %s:%d: %s\n",                         \
+                    __FILE__,                                                     \
+                    __LINE__,                                                     \
+                    cudaGetErrorString(_e));                                     \
+            exit(1);                                                              \
+        }                                                                         \
+    } while (0)
 
-typedef enum { PASS = 0, FAIL = 1, SKIP = 2 } result_t;
-typedef struct { result_t result; char expected[512]; char actual[512]; } outcome_t;
-typedef struct { unsigned long addr, timestamp_ns; } dirty_entry_t;
+typedef enum {
+    PASS = 0,
+    FAIL = 1,
+    SKIP = 2,
+} result_t;
 
-__global__ void kernel_read(const int *data, int n, volatile int *sink)
+typedef struct {
+    unsigned long addr;
+    unsigned long ts;
+} entry_t;
+
+typedef struct {
+    int *managed;
+    unsigned long base;
+} fixture_t;
+
+typedef struct {
+    result_t result;
+    char expected[256];
+    char actual[256];
+} outcome_t;
+
+static int g_pass = 0;
+static int g_fail = 0;
+static int g_skip = 0;
+
+__global__ void read_kernel(const int *data, int n, volatile int *sink)
 {
     int acc = 0;
-    for (int i = 0; i < n; i++) acc += data[i];
+    for (int i = 0; i < n; ++i)
+        acc += data[i];
     *sink = acc;
 }
 
-__global__ void kernel_write(int *data, int n)
-    { for (int i = 0; i < n; i++) data[i] = i + 1; }
-
-__global__ void kernel_write_range(int *data, int ps, int pe)
+__global__ void write_kernel(int *data, int n)
 {
-    int ipp = PAGE_SIZE / sizeof(int);
-    for (int p = ps; p < pe; p++)
-        for (int i = 0; i < ipp; i++)
-            data[p * ipp + i] = p * ipp + i + 1;
+    for (int i = 0; i < n; ++i)
+        data[i] = i + 1;
 }
 
-/* Returns number of dirty entries parsed, -1 on open error, -2 if tracking
- * is not active.  Parses: 0x<addr> <ts_ns>. */
-static int read_procfs(dirty_entry_t *out, int max)
+__global__ void write_range_kernel(int *data, int start_page, int end_page)
 {
-    FILE *f = fopen(PROCFS_DIRTY, "r");
-    if (!f) return -1;
-    int n = 0; char line[256];
-    while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { fclose(f); return -2; }
-            continue;
-        }
-        if (n >= max) break;
-        if (sscanf(line, "0x%lx %lu",
-                   &out[n].addr, &out[n].timestamp_ns) == 2) {
-            n++;
-        }
+    for (int p = start_page; p < end_page; ++p) {
+        for (int i = 0; i < INTS_PER_PAGE; ++i)
+            data[p * INTS_PER_PAGE + i] = p * INTS_PER_PAGE + i + 1;
     }
-    fclose(f); return n;
 }
 
-static int is_page_tracked(dirty_entry_t *e, int n, unsigned long addr)
+static void print_result(const char *id,
+                         const char *name,
+                         result_t result,
+                         const char *expected,
+                         const char *actual)
 {
-    unsigned long pa = addr & ~((unsigned long)(PAGE_SIZE - 1));
-    for (int i = 0; i < n; i++) if (e[i].addr == pa) return 1;
-    return 0;
+    const char *status = result == PASS ? "PASS" : result == SKIP ? "SKIP" : "FAIL";
+
+    printf("  [%s] %s - %s\n", status, id, name);
+    if (expected && expected[0])
+        printf("         expected: %s\n", expected);
+    if (actual && actual[0])
+        printf("         actual:   %s\n", actual);
+
+    if (result == PASS)
+        ++g_pass;
+    else if (result == FAIL)
+        ++g_fail;
+    else
+        ++g_skip;
 }
 
-static void sysfs_write(const char *path, const char *val)
+static int procfs_exists(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+static void procfs_write(const char *path, const char *val)
 {
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
+    ssize_t written;
+
+    if (fd < 0) {
+        perror(path);
+        exit(1);
+    }
+
+    written = write(fd, val, strlen(val));
+    if (written < 0) {
+        perror("write");
+        close(fd);
+        exit(1);
+    }
+
     close(fd);
 }
 
-static int  sysfs_exists(const char *p)    { struct stat st; return stat(p, &st) == 0; }
-static void set_tracking(int v)            { sysfs_write(v ? PROCFS_DIRTY_START : PROCFS_DIRTY_STOP, v ? "start\n" : "stop\n"); }
-static void reset_table(void)              { sysfs_write(PROCFS_DIRTY_START, "start\n"); }
+static void start_tracking(void){ procfs_write(PROCFS_START, "start\n");   					}
+static void stop_tracking(void) { procfs_write(PROCFS_STOP, "stop\n");     					}
+static void reset_range(void)   { procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");	}
 
-
-/* =========================================================================
- * GROUP A - basic tracking semantics
- * ========================================================================= */
-
-static void t01_writes_recorded(int *managed, int dev)
+static void set_range(unsigned long start, unsigned long end)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected), "all %d pages present after GPU write", NUM_PAGES);
-    set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n);
-        out.result = FAIL;
-    } else {
-        int miss = 0;
-        for (int p = 0; p < NUM_PAGES; p++)
-            if (!is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) miss++;
-        if (miss) { snprintf(out.actual, sizeof(out.actual), "%d/%d pages missing (total=%d)", miss, NUM_PAGES, n); out.result = FAIL; }
-        else        snprintf(out.actual, sizeof(out.actual), "all %d pages present (total=%d)", NUM_PAGES, n);
+    char buf[64];
+    snprintf(buf, sizeof(buf), "0x%lx 0x%lx\n", start, end);
+    procfs_write(PROCFS_RANGE, buf);
+}
+
+/* Return: entries parsed, -1 if file open failed, -2 if table not active. */
+static int read_pages(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_PAGES, "r");
+    char line[256];
+    int n = 0;
+
+    if (!f)
+        return -1;
+
+    while (fgets(line, sizeof(line), f)) {
+        if (line[0] == '#') {
+            if (strstr(line, "not active")) {
+                fclose(f);
+                return -2;
+            }
+            continue;
+        }
+
+        if (n >= max)
+            break;
+
+        if (sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+            ++n;
     }
-    set_tracking(0);
+
+    fclose(f);
+    return n;
+}
+
+static int page_tracked(const entry_t *entries, int n, unsigned long addr)
+{
+    unsigned long page_addr = addr & ~((unsigned long)(PAGE_SIZE - 1));
+
+    for (int i = 0; i < n; ++i) {
+        if (entries[i].addr == page_addr)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int count_missing(const fixture_t *fx, const entry_t *entries, int n, int start_page, int end_page)
+{
+    int missing = 0;
+
+    for (int p = start_page; p < end_page; ++p) {
+        unsigned long addr = fx->base + (unsigned long)p * PAGE_SIZE;
+        if (!page_tracked(entries, n, addr))
+            ++missing;
+    }
+
+    return missing;
+}
+
+static int count_present(const fixture_t *fx, const entry_t *entries, int n, int start_page, int end_page)
+{
+    int present = 0;
+
+    for (int p = start_page; p < end_page; ++p) {
+        unsigned long addr = fx->base + (unsigned long)p * PAGE_SIZE;
+        if (page_tracked(entries, n, addr))
+            ++present;
+    }
+
+    return present;
+}
+
+static void t01_writes_recorded(const fixture_t *fx)
+{
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+
+    snprintf(out.expected, sizeof(out.expected), "all %d pages present after GPU write", NUM_PAGES);
+
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int missing = n >= 0 ? count_missing(fx, entries, n, 0, NUM_PAGES) : NUM_PAGES;
+
+    if (n < 0 || missing > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d missing=%d/%d",
+                 n,
+                 missing,
+                 NUM_PAGES);
+        out.result = FAIL;
+    }
+    else {
+        snprintf(out.actual, sizeof(out.actual), "all pages present (total=%d)", n);
+    }
+
+    stop_tracking();
     print_result("T01", "writes_recorded", out.result, out.expected, out.actual);
 }
 
-static void t02_reads_not_recorded(int *managed, int dev)
+static void t02_reads_not_recorded(const fixture_t *fx)
 {
-    int *sink = NULL; dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected), "0 managed pages tracked (GPU reads don't fault as write)");
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    int *sink = NULL;
+
+    snprintf(out.expected, sizeof(out.expected), "0 pages tracked for read-only GPU access");
+
     CUDA_CHECK(cudaMalloc(&sink, sizeof(int)));
-    set_tracking(1);
-    kernel_read<<<1, 1>>>(managed, NUM_INTS, (volatile int *)sink);
+
+    start_tracking();
+    read_kernel<<<1, 1>>>(fx->managed, NUM_INTS, (volatile int *)sink);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), n == -2 ? "tracking not active" : "procfs read failed (n=%d)", n);
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int spurious = n >= 0 ? count_present(fx, entries, n, 0, NUM_PAGES) : NUM_PAGES;
+
+    if (n < 0 || spurious > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d spurious=%d",
+                 n,
+                 spurious);
         out.result = FAIL;
-    } else {
-        int spur = 0;
-        for (int p = 0; p < NUM_PAGES; p++)
-            if (is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) spur++;
-        if (spur) { snprintf(out.actual, sizeof(out.actual), "%d pages spuriously tracked (total=%d)", spur, n); out.result = FAIL; }
-        else        snprintf(out.actual, sizeof(out.actual), "0 managed pages tracked (total=%d)", n);
     }
-    set_tracking(0); cudaFree(sink);
+    else {
+        snprintf(out.actual, sizeof(out.actual), "0 tracked pages (total=%d)", n);
+    }
+
+    stop_tracking();
+    CUDA_CHECK(cudaFree(sink));
+
     print_result("T02", "reads_not_recorded", out.result, out.expected, out.actual);
 }
 
-static void t03_reset_clears_table(int *managed, int dev)
+static void t03_reset_clears_table(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    int half = NUM_PAGES / 2;
-    snprintf(out.expected, sizeof(out.expected),
-             "pages 0..%d absent (pre-reset), pages %d..%d present (post-reset)",
-             half - 1, half, NUM_PAGES - 1);
-    set_tracking(1);
-    kernel_write_range<<<1, 1>>>(managed, 0, half);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    const int half = NUM_PAGES / 2;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "pages 0..%d absent, pages %d..%d present after reset",
+             half - 1,
+             half,
+             NUM_PAGES - 1);
+
+    start_tracking();
+    write_range_kernel<<<1, 1>>>(fx->managed, 0, half);
     CUDA_CHECK(cudaDeviceSynchronize());
-    reset_table();
-    kernel_write_range<<<1, 1>>>(managed, half, NUM_PAGES);
+
+    /* Start command reinitializes the table in current implementation. */
+    start_tracking();
+    write_range_kernel<<<1, 1>>>(fx->managed, half, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n); out.result = FAIL;
-    } else {
-        int ghost = 0, present = 0, missing = 0;
-        for (int p = 0; p < half; p++)
-            if (is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) ghost++;
-        for (int p = half; p < NUM_PAGES; p++)
-            if (is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) present++; else missing++;
-        if (ghost || missing) { snprintf(out.actual, sizeof(out.actual), "ghost=%d missing=%d present=%d (total=%d)", ghost, missing, present, n); out.result = FAIL; }
-        else                    snprintf(out.actual, sizeof(out.actual), "pre-reset absent, post-reset present (%d pages, total=%d)", present, n);
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int ghost = n >= 0 ? count_present(fx, entries, n, 0, half) : half;
+    int missing = n >= 0 ? count_missing(fx, entries, n, half, NUM_PAGES) : (NUM_PAGES - half);
+
+    if (n < 0 || ghost > 0 || missing > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d ghost=%d missing=%d",
+                 n,
+                 ghost,
+                 missing);
+        out.result = FAIL;
     }
-    set_tracking(0);
+    else {
+        snprintf(out.actual, sizeof(out.actual), "table reset behavior correct (total=%d)", n);
+    }
+
+    stop_tracking();
     print_result("T03", "reset_clears_table", out.result, out.expected, out.actual);
 }
 
-static void t04_mixed_read_write(int *managed, int dev)
+static void t04_mixed_read_write(const fixture_t *fx)
 {
-    int *sink = NULL; dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    int *sink = NULL;
+    const int half = NUM_PAGES / 2;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "read-only half clean, write half tracked");
+
     CUDA_CHECK(cudaMalloc(&sink, sizeof(int)));
-    int half = NUM_PAGES / 2, ipp = PAGE_SIZE / sizeof(int);
-    snprintf(out.expected, sizeof(out.expected),
-             "pages 0..%d clean (reads only), pages %d..%d dirty (writes)",
-             half - 1, half, NUM_PAGES - 1);
-    set_tracking(1);
-    kernel_read<<<1, 1>>>(managed, half * ipp, (volatile int *)sink);
+
+    start_tracking();
+    read_kernel<<<1, 1>>>(fx->managed, half * INTS_PER_PAGE, (volatile int *)sink);
     CUDA_CHECK(cudaDeviceSynchronize());
-    kernel_write_range<<<1, 1>>>(managed, half, NUM_PAGES);
+
+    write_range_kernel<<<1, 1>>>(fx->managed, half, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n); out.result = FAIL;
-    } else {
-        int rs = 0, wm = 0;
-        for (int p = 0; p < half; p++)
-            if ( is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) rs++;
-        for (int p = half; p < NUM_PAGES; p++)
-            if (!is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) wm++;
-        if (rs || wm) { snprintf(out.actual, sizeof(out.actual), "read spurious=%d write missing=%d (total=%d)", rs, wm, n); out.result = FAIL; }
-        else            snprintf(out.actual, sizeof(out.actual), "read pages clean, write pages tracked (total=%d)", n);
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int read_spurious = n >= 0 ? count_present(fx, entries, n, 0, half) : half;
+    int write_missing = n >= 0 ? count_missing(fx, entries, n, half, NUM_PAGES) : (NUM_PAGES - half);
+
+    if (n < 0 || read_spurious > 0 || write_missing > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d read_spurious=%d write_missing=%d",
+                 n,
+                 read_spurious,
+                 write_missing);
+        out.result = FAIL;
     }
-    set_tracking(0); cudaFree(sink);
+    else {
+        snprintf(out.actual, sizeof(out.actual), "read/write split respected (total=%d)", n);
+    }
+
+    stop_tracking();
+    CUDA_CHECK(cudaFree(sink));
+
     print_result("T04", "mixed_read_write", out.result, out.expected, out.actual);
 }
 
-static void t05_migration_write_retracked(int *managed, int dev)
+static void t05_restart_and_retrack(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected),
-             "all %d pages tracked after table reset + CPU migration + GPU write", NUM_PAGES);
-    set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "all pages tracked after restart + second write");
+
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    reset_table();
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n); out.result = FAIL;
-    } else {
-        int miss = 0;
-        for (int p = 0; p < NUM_PAGES; p++)
-            if (!is_page_tracked(e, n, (unsigned long)managed + p * PAGE_SIZE)) miss++;
-        if (miss) { snprintf(out.actual, sizeof(out.actual), "%d/%d missing after migration+write (total=%d)", miss, NUM_PAGES, n); out.result = FAIL; }
-        else        snprintf(out.actual, sizeof(out.actual), "all %d pages tracked after migration (total=%d)", NUM_PAGES, n);
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int missing = n >= 0 ? count_missing(fx, entries, n, 0, NUM_PAGES) : NUM_PAGES;
+
+    if (n < 0 || missing > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d missing=%d/%d",
+                 n,
+                 missing,
+                 NUM_PAGES);
+        out.result = FAIL;
     }
-    set_tracking(0);
-    print_result("T05", "migration_write_retracked", out.result, out.expected, out.actual);
+    else {
+        snprintf(out.actual, sizeof(out.actual), "all pages retracked (total=%d)", n);
+    }
+
+    stop_tracking();
+    print_result("T05", "restart_and_retrack", out.result, out.expected, out.actual);
 }
 
-static void t06_tracking_disabled(int *managed, int dev)
+static void t06_tracking_disabled(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected),
-             "procfs reports '# dirty tracking not active' when uvm_dirty_tracking=0");
-    set_tracking(0);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
-    CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n == -2) snprintf(out.actual, sizeof(out.actual), "procfs reports 'not active'");
-    else        { snprintf(out.actual, sizeof(out.actual), "expected not-active, got n=%d", n); out.result = FAIL; }
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+
+    (void)fx;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "dirty_pages returns '# dirty tracking not active' when stopped");
+
+    stop_tracking();
+    int n = read_pages(entries, MAX_ENTRIES);
+
+    if (n != -2) {
+        snprintf(out.actual, sizeof(out.actual), "expected -2, got %d", n);
+        out.result = FAIL;
+    }
+    else {
+        snprintf(out.actual, sizeof(out.actual), "returned not-active marker");
+    }
+
     print_result("T06", "tracking_disabled", out.result, out.expected, out.actual);
 }
 
-/* =========================================================================
- * GROUP B - addr range filter
- * ========================================================================= */
+/* T07 intentionally reserved to keep historical numbering stable. */
 
-/* T08: writing the same pages a second time (without resetting the table)
- * must not duplicate entries - xarray overwrites on the same key. */
-static void t08_same_page_single_entry(int *managed, int dev)
+static void t08_same_page_single_entry(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected),
-             "exactly %d entries after 2 write cycles (xarray overwrites same key)", NUM_PAGES);
-    set_tracking(1);
-    /* First write cycle */
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "exactly %d entries after writing same pages twice",
+             NUM_PAGES);
+
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    /* Second write cycle - same virtual pages, no table reset */
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES);
-    if (n < 0) {
-        snprintf(out.actual, sizeof(out.actual), "procfs read failed (n=%d)", n); out.result = FAIL;
-    } else if (n != NUM_PAGES) {
-        snprintf(out.actual, sizeof(out.actual),
-                 "expected %d entries, got %d (duplicates or missing)",
-                 NUM_PAGES, n);
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    if (n != NUM_PAGES) {
+        snprintf(out.actual, sizeof(out.actual), "expected %d, got %d", NUM_PAGES, n);
         out.result = FAIL;
-    } else {
-        snprintf(out.actual, sizeof(out.actual),
-                 "exactly %d entries after 2 write cycles (no duplicates)", NUM_PAGES);
     }
-    set_tracking(0);
+    else {
+        snprintf(out.actual, sizeof(out.actual), "no duplicate entries");
+    }
+
+    stop_tracking();
     print_result("T08", "same_page_single_entry", out.result, out.expected, out.actual);
 }
 
-/* T09: addr range covers all managed pages - all pages must appear. */
-static void t09_range_inside(int *managed, int dev)
+static void t09_range_inside(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    unsigned long base = (unsigned long)managed;
-    snprintf(out.expected, sizeof(out.expected),
-             "all %d pages present when range exactly covers allocation", NUM_PAGES);
-    set_addr_range(base, base + NUM_PAGES * PAGE_SIZE); set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    unsigned long end = fx->base + (unsigned long)NUM_PAGES * PAGE_SIZE;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "all pages visible when range exactly covers allocation");
+
+    set_range(fx->base, end);
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES), miss = 0;
-    for (int p = 0; p < NUM_PAGES; p++)
-        if (!is_page_tracked(e, n, base + p * PAGE_SIZE)) miss++;
-    if (n < 0 || miss) { snprintf(out.actual, sizeof(out.actual), "n=%d miss=%d/%d", n, miss, NUM_PAGES); out.result = FAIL; }
-    else                  snprintf(out.actual, sizeof(out.actual), "all %d pages inside range tracked (total=%d)", NUM_PAGES, n);
-    set_tracking(0); reset_addr_range();
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int missing = n >= 0 ? count_missing(fx, entries, n, 0, NUM_PAGES) : NUM_PAGES;
+
+    if (n < 0 || missing > 0) {
+        snprintf(out.actual, sizeof(out.actual), "n=%d missing=%d", n, missing);
+        out.result = FAIL;
+    }
+    else {
+        snprintf(out.actual, sizeof(out.actual), "all pages in-range (total=%d)", n);
+    }
+
+    stop_tracking();
+    reset_range();
     print_result("T09", "range_inside", out.result, out.expected, out.actual);
 }
 
-/* T10: addr range is entirely above managed allocation - no pages must appear. */
-static void t10_range_outside(int *managed, int dev)
+static void t10_range_outside(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected),
-             "0 managed pages returned when range is entirely above the allocation");
-    unsigned long base = (unsigned long)managed;
-    unsigned long rs = base + NUM_PAGES * PAGE_SIZE;
-    set_addr_range(rs, rs + NUM_PAGES * PAGE_SIZE); set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    unsigned long range_start = fx->base + (unsigned long)NUM_PAGES * PAGE_SIZE;
+    unsigned long range_end = range_start + (unsigned long)NUM_PAGES * PAGE_SIZE;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "0 pages visible when range is outside allocation");
+
+    set_range(range_start, range_end);
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES), spur = 0;
-    if (n >= 0)
-        for (int p = 0; p < NUM_PAGES; p++)
-            if (is_page_tracked(e, n, base + p * PAGE_SIZE)) spur++;
-    if (n < 0 || spur) { snprintf(out.actual, sizeof(out.actual), "n=%d spurious=%d", n, spur); out.result = FAIL; }
-    else                  snprintf(out.actual, sizeof(out.actual), "0 pages tracked (range outside, total=%d)", n);
-    set_tracking(0); reset_addr_range();
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int spurious = n >= 0 ? count_present(fx, entries, n, 0, NUM_PAGES) : NUM_PAGES;
+
+    if (n < 0 || spurious > 0) {
+        snprintf(out.actual, sizeof(out.actual), "n=%d spurious=%d", n, spurious);
+        out.result = FAIL;
+    }
+    else {
+        snprintf(out.actual, sizeof(out.actual), "no managed pages in result (total=%d)", n);
+    }
+
+    stop_tracking();
+    reset_range();
     print_result("T10", "range_outside", out.result, out.expected, out.actual);
 }
 
-/* T11: addr range covers only the first half - second half must be absent. */
-static void t11_range_partial_coverage(int *managed, int dev)
+static void t11_range_partial_coverage(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    int half = NUM_PAGES / 2;
-    snprintf(out.expected, sizeof(out.expected),
-             "pages 0..%d tracked (in range), pages %d..%d absent (out of range)",
-             half - 1, half, NUM_PAGES - 1);
-    unsigned long base = (unsigned long)managed;
-    set_addr_range(base, base + half * PAGE_SIZE); set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    const int half = NUM_PAGES / 2;
+    unsigned long end = fx->base + (unsigned long)half * PAGE_SIZE;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "first half present, second half absent");
+
+    set_range(fx->base, end);
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES), in_miss = 0, out_pres = 0;
-    for (int p = 0; p < NUM_PAGES; p++) {
-        int t = is_page_tracked(e, n, base + p * PAGE_SIZE);
-        if (p <  half && !t) in_miss++;
-        if (p >= half &&  t) out_pres++;
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int in_missing = n >= 0 ? count_missing(fx, entries, n, 0, half) : half;
+    int out_present = n >= 0 ? count_present(fx, entries, n, half, NUM_PAGES) : (NUM_PAGES - half);
+
+    if (n < 0 || in_missing > 0 || out_present > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d in_missing=%d out_present=%d",
+                 n,
+                 in_missing,
+                 out_present);
+        out.result = FAIL;
     }
-    if (n < 0 || in_miss || out_pres) { snprintf(out.actual, sizeof(out.actual), "n=%d in_miss=%d out_pres=%d", n, in_miss, out_pres); out.result = FAIL; }
-    else                                 snprintf(out.actual, sizeof(out.actual), "first half tracked, second half absent (total=%d)", n);
-    set_tracking(0); reset_addr_range();
+    else {
+        snprintf(out.actual, sizeof(out.actual), "partial range filtering correct (total=%d)", n);
+    }
+
+    stop_tracking();
+    reset_range();
     print_result("T11", "range_partial_coverage", out.result, out.expected, out.actual);
 }
 
-/* T12: range excludes first and last page - only inner pages must appear. */
-static void t12_range_boundary_pages(int *managed, int dev)
+static void t12_range_boundary_pages(const fixture_t *fx)
 {
-    dirty_entry_t e[MAX_ENTRIES]; outcome_t out = { PASS, "", "" };
-    snprintf(out.expected, sizeof(out.expected),
-             "page 0 absent, pages 1..%d present, page %d absent",
-             NUM_PAGES - 2, NUM_PAGES - 1);
-    unsigned long base = (unsigned long)managed;
-    set_addr_range(base + PAGE_SIZE, base + (NUM_PAGES - 1) * PAGE_SIZE);
-    set_tracking(1);
-    kernel_write<<<1, 1>>>(managed, NUM_INTS);
+    entry_t entries[MAX_ENTRIES];
+    outcome_t out = { PASS, "", "" };
+    unsigned long start = fx->base + PAGE_SIZE;
+    unsigned long end = fx->base + (unsigned long)(NUM_PAGES - 1) * PAGE_SIZE;
+
+    snprintf(out.expected,
+             sizeof(out.expected),
+             "page 0 and last page absent, inner pages present");
+
+    set_range(start, end);
+    start_tracking();
+    write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    int n = read_procfs(e, MAX_ENTRIES), errors = 0; char diag[256] = "";
-    if (n >= 0 && is_page_tracked(e, n, base))
-        { strcat(diag, "p=0 tracked; "); errors++; }
-    for (int p = 1; p < NUM_PAGES - 1; p++)
-        if (n < 0 || !is_page_tracked(e, n, base + p * PAGE_SIZE)) {
-            errors++;
-            if (strlen(diag) < 200) { char t[32]; snprintf(t, sizeof(t), "p=%d missing; ", p); strcat(diag, t); }
-        }
-    if (n >= 0 && is_page_tracked(e, n, base + (NUM_PAGES - 1) * PAGE_SIZE))
-        { strcat(diag, "p=last tracked; "); errors++; }
-    if (errors) { snprintf(out.actual, sizeof(out.actual), "n=%d  %s", n, diag); out.result = FAIL; }
-    else          snprintf(out.actual, sizeof(out.actual), "boundary pages excluded, inner present (total=%d)", n);
-    set_tracking(0); reset_addr_range();
+
+    int n = read_pages(entries, MAX_ENTRIES);
+    int first_present = n >= 0 ? count_present(fx, entries, n, 0, 1) : 1;
+    int middle_missing = n >= 0 ? count_missing(fx, entries, n, 1, NUM_PAGES - 1) : (NUM_PAGES - 2);
+    int last_present = n >= 0 ? count_present(fx, entries, n, NUM_PAGES - 1, NUM_PAGES) : 1;
+
+    if (n < 0 || first_present > 0 || middle_missing > 0 || last_present > 0) {
+        snprintf(out.actual,
+                 sizeof(out.actual),
+                 "n=%d first_present=%d middle_missing=%d last_present=%d",
+                 n,
+                 first_present,
+                 middle_missing,
+                 last_present);
+        out.result = FAIL;
+    }
+    else {
+        snprintf(out.actual, sizeof(out.actual), "boundary filtering correct (total=%d)", n);
+    }
+
+    stop_tracking();
+    reset_range();
     print_result("T12", "range_boundary_pages", out.result, out.expected, out.actual);
 }
 
 int main(void)
 {
-    int *managed = NULL, dev;
+    fixture_t fx = { 0 };
 
     printf("=== UVM Dirty Tracking Test Suite ===\n\n");
 
-    if (geteuid() != 0)
-        { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
-    if (!sysfs_exists(PROCFS_DIRTY_START))
-        { fprintf(stderr, "ERROR: %s not found\n", PROCFS_DIRTY_START); return 1; }
-    if (!sysfs_exists(PROCFS_DIRTY))
-        { fprintf(stderr, "ERROR: %s not found\n", PROCFS_DIRTY); return 1; }
+    if (geteuid() != 0) {
+        fprintf(stderr, "ERROR: must run as root\n");
+        return 1;
+    }
 
-    CUDA_CHECK(cudaGetDevice(&dev));
-    CUDA_CHECK(cudaMallocManaged(&managed, NUM_PAGES * PAGE_SIZE));
-    memset(managed, 0, NUM_PAGES * PAGE_SIZE);
+    if (!procfs_exists(PROCFS_START) ||
+        !procfs_exists(PROCFS_STOP) ||
+        !procfs_exists(PROCFS_PAGES) ||
+        !procfs_exists(PROCFS_RANGE)) {
+        fprintf(stderr, "ERROR: one or more procfs controls are missing\n");
+        return 1;
+    }
+
+    CUDA_CHECK(cudaMallocManaged(&fx.managed, NUM_PAGES * PAGE_SIZE));
+    memset(fx.managed, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("  managed: 0x%lx - 0x%lx  (%d pages)\n\n",
-           (unsigned long)managed, (unsigned long)managed + NUM_PAGES * PAGE_SIZE, NUM_PAGES);
+    fx.base = (unsigned long)fx.managed;
 
+    printf("  managed: 0x%lx - 0x%lx (%d pages)\n\n",
+           fx.base,
+           fx.base + (unsigned long)NUM_PAGES * PAGE_SIZE,
+           NUM_PAGES);
 
-    printf("--- GROUP A ---\n");
-    t01_writes_recorded          (managed, dev);
-    t02_reads_not_recorded       (managed, dev);
-    t03_reset_clears_table       (managed, dev);
-    t04_mixed_read_write         (managed, dev);
-    t05_migration_write_retracked(managed, dev);
-    t06_tracking_disabled        (managed, dev);
+    printf("--- GROUP A: basic semantics ---\n");
+    t01_writes_recorded(&fx);
+    t02_reads_not_recorded(&fx);
+    t03_reset_clears_table(&fx);
+    t04_mixed_read_write(&fx);
+    t05_restart_and_retrack(&fx);
+    t06_tracking_disabled(&fx);
 
-    printf("\n--- GROUP B ---\n");
-    reset_addr_range();
-    t08_same_page_single_entry   (managed, dev);
-    t09_range_inside             (managed, dev);
-    t10_range_outside            (managed, dev);
-    t11_range_partial_coverage   (managed, dev);
-    t12_range_boundary_pages     (managed, dev);
+    printf("\n--- GROUP B: range filtering ---\n");
+    reset_range();
+    t08_same_page_single_entry(&fx);
+    t09_range_inside(&fx);
+    t10_range_outside(&fx);
+    t11_range_partial_coverage(&fx);
+    t12_range_boundary_pages(&fx);
 
-    CUDA_CHECK(cudaFree(managed));
+    CUDA_CHECK(cudaFree(fx.managed));
+
     int total = g_pass + g_fail + g_skip;
     printf("\n=== Results: %d/%d passed, %d failed, %d skipped ===\n",
-           g_pass, total, g_fail, g_skip);
-    return g_fail > 0 ? 1 : 0;
+           g_pass,
+           total,
+           g_fail,
+           g_skip);
+
+    return g_fail == 0 ? 0 : 1;
 }
