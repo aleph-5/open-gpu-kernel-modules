@@ -95,9 +95,11 @@ int main(int argc, char **argv)
     printf("[tc01] baseline  : %.3f ms\n", baseline_ns / 1e6);
 
     // tracked: start_track invalidates PTEs, next access generates faults
+    char pid_buf[16];
+    snprintf(pid_buf, sizeof(pid_buf), "%d", getpid());
     struct timespec ti0, ti1;
     clock_gettime(CLOCK_MONOTONIC, &ti0);
-    procfs_write(PROCFS_START, "start\n");
+    procfs_write(PROCFS_START, pid_buf);
     clock_gettime(CLOCK_MONOTONIC, &ti1);
     printf("[tc01] invalidate: %.3f ms\n", ns_elapsed(&ti0, &ti1) / 1e6);
 
@@ -109,7 +111,7 @@ int main(int argc, char **argv)
     long tracked_ns = ns_elapsed(&t2, &t3);
 
     long recorded = count_dirty_pages();
-    procfs_write(PROCFS_STOP, "stop\n");
+    procfs_write(PROCFS_STOP, pid_buf);
 
     printf("[tc01] tracked   : %.3f ms\n", tracked_ns / 1e6);
     printf("[tc01] overhead  : %.3f ms  (%.1f%%)\n",

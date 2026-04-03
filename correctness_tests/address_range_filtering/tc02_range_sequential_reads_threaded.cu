@@ -94,12 +94,16 @@ static void procfs_write(const char *path, const char *val) {
 }
 
 static void start_track(void) {
-    procfs_write(PROCFS_START, "start\n");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_START, buf);
 }
 
 
 static void stop_track(void) {
-    procfs_write(PROCFS_STOP, "stop\n");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_STOP, buf);
 }
 
 
@@ -138,7 +142,6 @@ static int read_dirty(entry_t *out, int max) {
 static void tally_quarter(entry_t *e, int n, unsigned long base, int q,
                            int *present, int *absent) {
     unsigned long q_base = base + (unsigned long)q * PAGES_PER_QUARTER * PAGE_SIZE;
-    unsigned long q_end  = q_base + (unsigned long)PAGES_PER_QUARTER * PAGE_SIZE;
     *present = 0;
     /* count distinct pages in quarter that appear in e[] */
     for (int p = 0; p < PAGES_PER_QUARTER; p++) {

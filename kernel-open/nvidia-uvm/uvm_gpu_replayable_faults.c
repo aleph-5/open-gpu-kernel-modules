@@ -1599,7 +1599,13 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
 
             // EDIT BY VIDHI JAIN
-            uvm_dirty_page_table_record(page_number, ktime_get_ns());
+            NV_STATUS result = uvm_dirty_page_table_record(page_number, ktime_get_ns());
+
+            if (result != NV_OK) {
+                printk(KERN_ERR "UVM: Failed to record dirty page for page number %lu (fault address: 0x%llx)\n",
+                       page_number, current_entry->fault_address);
+
+            }
             // END OF EDIT
 
         }

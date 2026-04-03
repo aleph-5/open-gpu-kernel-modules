@@ -91,9 +91,21 @@ static int sysfs_exists(const char *p)
 }
 
 
-static void tracking_on(void)  { procfs_write(PROCFS_START, "start\n"); }
-static void tracking_off(void) { procfs_write(PROCFS_STOP, "stop\n"); }
-static void reset_table(void)  { procfs_write(PROCFS_START, "start\n"); }
+static void tracking_on(void)  {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_START, buf);
+}
+static void tracking_off(void) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_STOP, buf);
+}
+static void reset_table(void)  {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_START, buf);
+}
 
 
 static double wall_ms(void)
@@ -141,7 +153,6 @@ static bench_t run_bench(int *managed, int *sink_dev,
     if (tracking) {
         tracking_on();
     } else {
-        tracking_off();
         launch_kernel(wl, managed, num_ints, sink_dev);
         CUDA_CHECK(cudaDeviceSynchronize());
     }

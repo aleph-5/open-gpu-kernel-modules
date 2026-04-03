@@ -44,8 +44,16 @@ static void write_range_to_procfs(const char *path, unsigned long start, unsigne
     close(fd);
 }
 
-static void start_tracking(void) { write_str_to_procfs(PROCFS_START, "start\n"); }
-static void stop_tracking(void) { write_str_to_procfs(PROCFS_STOP, "stop\n"); }
+static void start_tracking(void) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    write_str_to_procfs(PROCFS_START, buf);
+}
+static void stop_tracking(void) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    write_str_to_procfs(PROCFS_STOP, buf);
+}
 
 static int count_recorded_pages(volatile char *buf, size_t size)
 {

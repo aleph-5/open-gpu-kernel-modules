@@ -18,6 +18,9 @@
 *******************************************************************************/
 
 #include "uvm_common.h"
+// EDIT BY KUSHAGRA
+#include "uvm_dirty_ds.h"
+// END OF EDIT
 #include "uvm_linux.h"
 #include "uvm_forward_decl.h"
 
@@ -42,10 +45,19 @@ NV_STATUS (*uvm_dirty_barrier_end_fn)(void) = NULL;
 // END OF EDIT
 
 // EDIT BY ADITI KHANDELIA
-static DEFINE_MUTEX(uvm_dirty_page_table_lock);
-static struct uvm_dirty_page_table* g_uvm_dirty_page_table;
+// EDIT BY KUSHAGRA: replaced mutex with rwsem — hot-path ops (insert/lookup)
+// take the read side (concurrent), lifecycle ops (init/destroy) take the write side.
+static DECLARE_RWSEM(uvm_dirty_ds_rwsem);
 static DEFINE_MUTEX(uvm_dirty_lifecycle_lock);
 static bool g_uvm_dirty_tracking_active;
+
+// EDIT BY KUSHAGRA
+static struct uvm_dirty_ds g_dirty_ds = {
+    .ops  = &uvm_dirty_ds_xarray_ops,
+    .priv = NULL,
+};
+static pid_t g_dirty_owner_tgid = -1;
+// END OF EDIT
 
 bool uvm_dirty_tracking_active(void)
 {
@@ -62,125 +74,92 @@ pid_t uvm_owner_tgid_with_dirty_tracking_active(void)
 {
     pid_t owner_tgid;
 
-    mutex_lock(&uvm_dirty_page_table_lock);
-    if (g_uvm_dirty_page_table != NULL) {
-        owner_tgid = g_uvm_dirty_page_table->owner_tgid;
-    } else {
-        owner_tgid = -1;
-    }
-    mutex_unlock(&uvm_dirty_page_table_lock);
+    down_read(&uvm_dirty_ds_rwsem);
+    owner_tgid = g_dirty_owner_tgid;
+    up_read(&uvm_dirty_ds_rwsem);
 
     return owner_tgid;
 }
 
-NV_STATUS uvm_dirty_page_table_init(pid_t pid) {
-    mutex_lock(&uvm_dirty_page_table_lock);
+NV_STATUS uvm_dirty_page_table_init(pid_t pid)
+{
+    NV_STATUS status;
 
-    if (g_uvm_dirty_page_table != NULL) {
+    down_write(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv != NULL) {
         NV_STATUS destruction_status = uvm_dirty_page_table_destroy(true);
         if (destruction_status != NV_OK) {
-            mutex_unlock(&uvm_dirty_page_table_lock);
+            up_write(&uvm_dirty_ds_rwsem);
             return NV_ERR_GENERIC;
         }
     }
 
-    g_uvm_dirty_page_table = kmalloc(sizeof(struct uvm_dirty_page_table), GFP_KERNEL);
-    if (g_uvm_dirty_page_table == NULL) {
-        mutex_unlock(&uvm_dirty_page_table_lock);
-        return NV_ERR_NO_MEMORY;
+    status = uvm_dirty_ds_init(&g_dirty_ds);
+    if (status != NV_OK) {
+        up_write(&uvm_dirty_ds_rwsem);
+        return status;
     }
-    xa_init(&g_uvm_dirty_page_table->pages);
-    g_uvm_dirty_page_table->active = true;
-    g_uvm_dirty_page_table->owner_tgid = pid;
 
-    mutex_unlock(&uvm_dirty_page_table_lock);
+    g_dirty_owner_tgid = pid;
+    WRITE_ONCE(g_uvm_dirty_tracking_active, true);
+
+    up_write(&uvm_dirty_ds_rwsem);
     return NV_OK;
 }
 
+
 NV_STATUS uvm_dirty_page_table_destroy(bool locked) {
-    if(!locked) mutex_lock(&uvm_dirty_page_table_lock);
+    if (!locked) down_write(&uvm_dirty_ds_rwsem);
 
     WRITE_ONCE(g_uvm_dirty_tracking_active, false);
 
-    if (g_uvm_dirty_page_table == NULL) {
-        if (!locked) mutex_unlock(&uvm_dirty_page_table_lock);
+    if (g_dirty_ds.priv == NULL) {
+        if (!locked) up_write(&uvm_dirty_ds_rwsem);
         return NV_ERR_GENERIC;
     }
 
-    unsigned long index;
-    struct dirty_page_info *info;
-    xa_for_each(&g_uvm_dirty_page_table->pages, index, info) {
-        kfree(info);
-    }
-    xa_destroy(&g_uvm_dirty_page_table->pages);
-    kfree(g_uvm_dirty_page_table);
-    g_uvm_dirty_page_table = NULL;
+    uvm_dirty_ds_destroy(&g_dirty_ds);
+    g_dirty_owner_tgid = -1;
 
-    if(!locked) mutex_unlock(&uvm_dirty_page_table_lock);
+    if (!locked) up_write(&uvm_dirty_ds_rwsem);
     return NV_OK;
 }
 
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp) { // (EDIT BY VIDHI JAIN)
-    mutex_lock(&uvm_dirty_page_table_lock);
+    NV_STATUS status;
 
-    if (g_uvm_dirty_page_table == NULL) {
-        mutex_unlock(&uvm_dirty_page_table_lock);
+    down_read(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv == NULL) {
+        up_read(&uvm_dirty_ds_rwsem);
         return NV_ERR_NO_MEMORY;
     }
 
-    struct dirty_page_info* existing_info = uvm_dirty_page_table_lookup(page_number, true);
-    if (existing_info != NULL) {
-        mutex_unlock(&uvm_dirty_page_table_lock);
-        return NV_OK;
-    }
+    status = uvm_dirty_ds_insert(&g_dirty_ds, page_number, timestamp);
 
-    struct dirty_page_info* info = kmalloc(sizeof(struct dirty_page_info), GFP_ATOMIC);
-    if (info == NULL) {
-        mutex_unlock(&uvm_dirty_page_table_lock);
-        return NV_ERR_NO_MEMORY;
-    }
-
-    info->page_number = page_number;
-    info->timestamp = timestamp;
-    
-    // use xa_cmpxchg to insert
-    void* ret = xa_cmpxchg(&g_uvm_dirty_page_table->pages, page_number, NULL, info, GFP_ATOMIC);
-    if (xa_err(ret)) {
-        kfree(info);
-        mutex_unlock(&uvm_dirty_page_table_lock);
-        return NV_ERR_NO_MEMORY;
-    }
-    if (ret != NULL) {
-        kfree(info);
-        mutex_unlock(&uvm_dirty_page_table_lock);
-        return NV_OK;
-    }
-    
-    mutex_unlock(&uvm_dirty_page_table_lock);
-
-    return NV_OK;
+    up_read(&uvm_dirty_ds_rwsem);
+    return status;
 }
 
-struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, 
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
     bool locked) {
-    if (!locked) mutex_lock(&uvm_dirty_page_table_lock);
+    struct dirty_page_info *info;
 
-    if (g_uvm_dirty_page_table == NULL) {
-        if (!locked) mutex_unlock(&uvm_dirty_page_table_lock);
+    if (!locked) down_read(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv == NULL) {
+        if (!locked) up_read(&uvm_dirty_ds_rwsem);
         return NULL;
     }
 
-    struct dirty_page_info *info = xa_load(&g_uvm_dirty_page_table->pages, page_number);
-    if (info == NULL) {
-        if (!locked) mutex_unlock(&uvm_dirty_page_table_lock);
-        return NULL;    
-    }
+    info = uvm_dirty_ds_lookup(&g_dirty_ds, page_number);
 
-    if (!locked) mutex_unlock(&uvm_dirty_page_table_lock);
-
+    if (!locked) up_read(&uvm_dirty_ds_rwsem);
     return info;
 }
+// END OF EDIT
 
 // EDIT BY VIDHI JAIN
 static ssize_t dirty_range_write(struct file *file,
@@ -212,18 +191,22 @@ static const struct proc_ops dirty_range_fops = {
 // END OF EDIT
 
 // EDIT BY ARUSH - procfs query interface
-#if defined(CONFIG_PROC_FS)
+// EDIT BY KUSHAGRA
+static void procfs_print_page(unsigned long page_num, unsigned long timestamp,
+                               void *ctx)
+{
+    seq_printf((struct seq_file *)ctx, "0x%lx %lu\n",
+               page_num << PAGE_SHIFT, timestamp);
+}
+// END OF EDIT
 
 static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 {
-    mutex_lock(&uvm_dirty_page_table_lock);
+    down_read(&uvm_dirty_ds_rwsem);
 
-    unsigned long index;
-    struct dirty_page_info *info;
-
-    if (g_uvm_dirty_page_table == NULL) {
+    if (g_dirty_ds.priv == NULL) {
         seq_printf(s, "# dirty tracking not active\n");
-        mutex_unlock(&uvm_dirty_page_table_lock);
+        up_read(&uvm_dirty_ds_rwsem);
         return 0;
     }
 
@@ -240,27 +223,17 @@ static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
     if (dirty_query_end <= dirty_query_start) {
         seq_printf(s, "# invalid range: start 0x%lx is greater than end 0x%lx\n",
                    dirty_query_start, dirty_query_end);
-        mutex_unlock(&uvm_dirty_page_table_lock);
+        up_read(&uvm_dirty_ds_rwsem);
         return 0;
     }
     // END OF EDIT
 
-    index = start_index;
-
-    while((info = xa_find(&g_uvm_dirty_page_table->pages,
-                          &index,
-                          end_index,
-                          XA_PRESENT))){
-        seq_printf(s,
-                   "0x%lx %lu\n",
-                   index << PAGE_SHIFT,
-                   info->timestamp);
-        index++;
-    }
-
+    // EDIT BY KUSHAGRA
+    uvm_dirty_ds_for_each_in_range(&g_dirty_ds, start_index, end_index,
+                                    procfs_print_page, s);
     // END OF EDIT
 
-    mutex_unlock(&uvm_dirty_page_table_lock);
+    up_read(&uvm_dirty_ds_rwsem);
     return 0;
 }
 
@@ -280,26 +253,29 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
-    char kbuf[6]; 
-    size_t to_copy = min(count, sizeof(kbuf) - 1); // Safety in case of large input
-    if (copy_from_user(kbuf, buf, to_copy)){
+    char kbuf[16];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy)) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
-    } 
+    }
     kbuf[to_copy] = '\0';
-    char* start_string = "start";
-    if (strncmp(kbuf, start_string, strlen(start_string)) != 0) {
+
+    pid_t target_pid = 0;
+    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
 
     NV_STATUS status;
-    status = uvm_dirty_page_table_init(current->tgid);
+    status = uvm_dirty_page_table_init(target_pid);
     if (status != NV_OK) {
+        pr_err("uvm_dirty: page table init failed for pid %d (status %d)\n", target_pid, status);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
     }
     if (!uvm_dirty_invalidate_fn || !uvm_dirty_activate_now_fn || !uvm_dirty_barrier_end_fn) {
+        pr_err("uvm_dirty: one or more function pointers not registered\n");
         uvm_dirty_page_table_destroy(false);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
@@ -307,6 +283,8 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     status = uvm_dirty_invalidate_fn();
     if (status != NV_OK) {
+        pr_err("uvm_dirty: invalidate fn failed for pid %d (status %d) — is the pid a valid tgid with a UVM va_space open?\n",
+               target_pid, status);
         uvm_dirty_page_table_destroy(false);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
@@ -314,6 +292,7 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     status = uvm_dirty_activate_now_fn();
     if (status != NV_OK) {
+        pr_err("uvm_dirty: activate fn failed for pid %d (status %d)\n", target_pid, status);
         uvm_dirty_barrier_end_fn();
         uvm_dirty_page_table_destroy(false);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
@@ -322,6 +301,7 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     status = uvm_dirty_barrier_end_fn();
     if (status != NV_OK) {
+        pr_err("uvm_dirty: barrier_end fn failed for pid %d (status %d)\n", target_pid, status);
         uvm_dirty_page_table_destroy(false);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
@@ -334,6 +314,57 @@ static const struct proc_ops dirty_tracking_start_fops = {
     .proc_write = dirty_tracking_start,
 };
 
+
+// EDIT BY KUSHAGRA
+#define UVM_DIRTY_DS_STATS_FILE "/tmp/uvm_dirty_ds_stats.txt"
+
+/*
+ * Write accumulated stats to UVM_DIRTY_DS_STATS_FILE.
+ * Called once when dirty tracking stops — no I/O during the experiment.
+ */
+static void uvm_dirty_ds_stats_flush(void)
+{
+    struct file *f;
+    char buf[768];
+    int len;
+    loff_t pos = 0;
+    long ic, lc, fc;
+    s64 it, lt, ft;
+
+    if (!g_dirty_ds.stats.enabled)
+        return;
+
+    ic = DIRTY_DS_STATS_READ(&g_dirty_ds, insert_count);
+    lc = DIRTY_DS_STATS_READ(&g_dirty_ds, lookup_count);
+    fc = DIRTY_DS_STATS_READ(&g_dirty_ds, for_each_in_range_count);
+    it = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_time_ns);
+    lt = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_time_ns);
+    ft = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_in_range_time_ns);
+
+    len = snprintf(buf, sizeof(buf),
+        "insert:            count=%ld  total_ns=%lld  avg_ns=%lld\n"
+        "lookup:            count=%ld  total_ns=%lld  avg_ns=%lld\n"
+        "for_each_in_range: count=%ld  total_ns=%lld  avg_ns=%lld\n"
+        "init:              count=%ld  total_ns=%lld\n"
+        "destroy:           count=%ld  total_ns=%lld\n",
+        ic, it, ic ? it / ic : 0,
+        lc, lt, lc ? lt / lc : 0,
+        fc, ft, fc ? ft / fc : 0,
+        DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
+        DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns),
+        DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
+        DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+
+    f = filp_open(UVM_DIRTY_DS_STATS_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (IS_ERR(f)) {
+        pr_warn("uvm: could not open stats file %s\n", UVM_DIRTY_DS_STATS_FILE);
+        return;
+    }
+    kernel_write(f, buf, len, &pos);
+    filp_close(f, NULL);
+}
+// END OF EDIT
+
 static ssize_t dirty_tracking_stop(struct file* file,
     const char __user* buf,
     size_t count,
@@ -341,20 +372,26 @@ static ssize_t dirty_tracking_stop(struct file* file,
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
-    char kbuf[5];
+    char kbuf[16];
     size_t to_copy = min(count, sizeof(kbuf) - 1);
     if (copy_from_user(kbuf, buf, to_copy)) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
     }
     kbuf[to_copy] = '\0';
-    char* stop_string = "stop";
-    if (strncmp(kbuf, stop_string, strlen(stop_string)) != 0) {
+
+    pid_t target_pid = 0;
+    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
+    if (target_pid != uvm_owner_tgid_with_dirty_tracking_active()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -ESRCH;
+    }
 
     uvm_dirty_page_table_destroy(false);
+    uvm_dirty_ds_stats_flush();
     mutex_unlock(&uvm_dirty_lifecycle_lock);
     return count;
 }
@@ -363,6 +400,77 @@ static const struct proc_ops dirty_tracking_stop_fops = {
     .proc_write = dirty_tracking_stop,
 };
 
+// END OF EDIT
+
+static int nv_procfs_read_dirty_ds_stats(struct seq_file *s, void *v)
+{
+    long ic = DIRTY_DS_STATS_READ(&g_dirty_ds, insert_count);
+    long lc = DIRTY_DS_STATS_READ(&g_dirty_ds, lookup_count);
+    long fc = DIRTY_DS_STATS_READ(&g_dirty_ds, for_each_in_range_count);
+    s64  it = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_time_ns);
+    s64  lt = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_time_ns);
+    s64  ft = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_in_range_time_ns);
+
+    seq_printf(s, "enabled:           %d\n", g_dirty_ds.stats.enabled);
+    seq_printf(s, "insert:            count=%ld  total_ns=%lld  avg_ns=%lld\n",
+               ic, it, ic ? it / ic : 0);
+    seq_printf(s, "lookup:            count=%ld  total_ns=%lld  avg_ns=%lld\n",
+               lc, lt, lc ? lt / lc : 0);
+    seq_printf(s, "for_each_in_range: count=%ld  total_ns=%lld  avg_ns=%lld\n",
+               fc, ft, fc ? ft / fc : 0);
+    seq_printf(s, "init:              count=%ld  total_ns=%lld\n",
+               DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
+               DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns));
+    seq_printf(s, "destroy:           count=%ld  total_ns=%lld\n",
+               DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
+               DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+    return 0;
+}
+
+static int nv_procfs_read_dirty_ds_stats_entry(struct seq_file *s, void *v)
+{
+    return nv_procfs_read_dirty_ds_stats(s, v);
+}
+
+UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_ds_stats_entry);
+
+static ssize_t dirty_ds_stats_toggle(struct file *file,
+                                      const char __user *buf,
+                                      size_t count,
+                                      loff_t *ppos)
+{
+    char kbuf[8];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+
+    if (copy_from_user(kbuf, buf, to_copy))
+        return -EFAULT;
+    kbuf[to_copy] = '\0';
+
+    if (strncmp(kbuf, "enable", 6) == 0){
+        g_dirty_ds.stats.enabled = true;
+        // clear counters when enabling to ensure clean stats for the experiment
+        atomic_long_set(&g_dirty_ds.stats.insert_count, 0);
+        atomic64_set(&g_dirty_ds.stats.insert_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.lookup_count, 0);
+        atomic64_set(&g_dirty_ds.stats.lookup_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.for_each_in_range_count, 0);
+        atomic64_set(&g_dirty_ds.stats.for_each_in_range_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.init_count, 0);
+        atomic64_set(&g_dirty_ds.stats.init_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.destroy_count, 0);
+        atomic64_set(&g_dirty_ds.stats.destroy_time_ns, 0);
+    }
+    else if (strncmp(kbuf, "disable", 7) == 0)
+        g_dirty_ds.stats.enabled = false;
+    else
+        return -EINVAL;
+
+    return count;
+}
+
+static const struct proc_ops dirty_ds_stats_toggle_fops = {
+    .proc_write = dirty_ds_stats_toggle,
+};
 // END OF EDIT
 
 NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
@@ -397,10 +505,21 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
 
+    // EDIT BY KUSHAGRA
+    entry = NV_CREATE_PROC_FILE("dirty_ds_stats", parent, dirty_ds_stats_entry, NULL);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+
+    entry = proc_create("dirty_ds_stats_toggle",
+                        0222,
+                        parent,
+                        &dirty_ds_stats_toggle_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    // END OF EDIT
+
     return NV_OK;
 }
-
-#endif // CONFIG_PROC_FS
 // END OF EDIT - procfs query interface
 
 // END OF EDIT

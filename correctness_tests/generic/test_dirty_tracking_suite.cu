@@ -133,8 +133,16 @@ static void procfs_write(const char *path, const char *val)
     close(fd);
 }
 
-static void start_tracking(void){ procfs_write(PROCFS_START, "start\n");   					}
-static void stop_tracking(void) { procfs_write(PROCFS_STOP, "stop\n");     					}
+static void start_tracking(void) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_START, buf);
+}
+static void stop_tracking(void) {
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_STOP, buf);
+}
 static void reset_range(void)   { procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");	}
 
 static void set_range(unsigned long start, unsigned long end)
@@ -412,7 +420,6 @@ static void t06_tracking_disabled(const fixture_t *fx)
              sizeof(out.expected),
              "dirty_pages returns '# dirty tracking not active' when stopped");
 
-    stop_tracking();
     int n = read_pages(entries, MAX_ENTRIES);
 
     if (n != -2) {

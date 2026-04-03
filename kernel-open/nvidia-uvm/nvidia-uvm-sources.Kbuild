@@ -2,6 +2,10 @@ NVIDIA_UVM_SOURCES ?=
 NVIDIA_UVM_SOURCES_CXX ?=
 
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_common.c
+# EDIT BY KUSHAGRA
+NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_xarray.c
+NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_bitmap.c
+# END OF EDIT
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_linux.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/nvstatus.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/nvCpuUuid.c

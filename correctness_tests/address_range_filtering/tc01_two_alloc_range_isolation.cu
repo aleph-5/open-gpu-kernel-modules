@@ -80,12 +80,16 @@ static void procfs_write(const char *path, const char *val) {
 }
 
 static void start_track(void) {
-    procfs_write(PROCFS_START, "start\n");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_START, buf);
 }
 
 
 static void stop_track(void) {
-    procfs_write(PROCFS_STOP, "stop\n");
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_STOP, buf);
 }
 
 

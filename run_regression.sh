@@ -30,7 +30,7 @@ ANSI_RED="\033[31m"
 ANSI_BOLD="\033[1m"
 ANSI_RESET="\033[0m"
 
-color() { printf "%b%s%b" "$2" "$1" "$ANSI_RESET"; }
+color() { printf "%b%s\n%b" "$2" "$1" "$ANSI_RESET"; }
 
 TOTAL_SUITES=0
 FAILED_SUITES=0
@@ -43,7 +43,7 @@ run_suite_with_runner() {
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
     echo ""
-    color "Running suite: $suite_name\n" "$ANSI_BOLD"
+    color "Running suite: $suite_name" "$ANSI_BOLD"
 
     local args=()
     [ "$NO_BUILD" -eq 1 ] && args+=(--no-build)
@@ -64,7 +64,7 @@ run_generic_suite() {
     TOTAL_SUITES=$((TOTAL_SUITES + 1))
 
     echo ""
-    color "Running suite: $suite_name\n" "$ANSI_BOLD"
+    color "Running suite: $suite_name" "$ANSI_BOLD"
 
     if [ "$NO_BUILD" -eq 0 ]; then
         echo "[runner] building: make -C $suite_dir"

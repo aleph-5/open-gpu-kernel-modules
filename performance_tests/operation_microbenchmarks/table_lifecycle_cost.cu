@@ -47,6 +47,22 @@ static double timed_write_str(const char *path, const char *val)
     return (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3;
 }
 
+static void write_pid_to_procfs(const char *path)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    write_str_to_procfs(path, buf);
+}
+
+static double timed_write_pid(const char *path)
+{
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    write_pid_to_procfs(path);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    return (t1.tv_sec - t0.tv_sec) * 1e6 + (t1.tv_nsec - t0.tv_nsec) / 1e3;
+}
+
 static void write_range_to_procfs(const char *path, unsigned long start, unsigned long end)
 {
     char buf[64];
@@ -149,9 +165,9 @@ int main(void)
             CUDA_CHECK(cudaDeviceSynchronize());
 
             /* time start_track: inits empty xarray + invalidates N GPU PTEs */
-            double t = timed_write_str(PROCFS_START, "start\n");
+            double t = timed_write_pid(PROCFS_START);
 
-            write_str_to_procfs(PROCFS_STOP, "stop\n");
+            write_pid_to_procfs(PROCFS_STOP);
 
             fprintf(csv, "%d,%d,%.3f\n", n, iter, t);
             sum += t;
@@ -176,7 +192,7 @@ int main(void)
         double sum = 0.0;
 
         for (int iter = 0; iter < ITERATIONS; iter++) {
-            write_str_to_procfs(PROCFS_START, "start\n");
+            write_pid_to_procfs(PROCFS_START);
 
             CUDA_CHECK(cudaDeviceSynchronize());
             touch_pages<<<1, FAULT_CHUNK>>>(buf, n);
@@ -187,12 +203,12 @@ int main(void)
                 fprintf(stderr,
                         "iter %d: expected %d recorded pages, got %d - skipping\n",
                         iter, n, recorded);
-                write_str_to_procfs(PROCFS_STOP, "stop\n");
+                write_pid_to_procfs(PROCFS_STOP);
                 continue;
             }
 
             /* time stop_track: walks and frees N xarray entries */
-            double t = timed_write_str(PROCFS_STOP, "stop\n");
+            double t = timed_write_pid(PROCFS_STOP);
 
             fprintf(csv2, "%d,%d,%d,%.3f\n", n, iter, recorded, t);
             sum += t;
