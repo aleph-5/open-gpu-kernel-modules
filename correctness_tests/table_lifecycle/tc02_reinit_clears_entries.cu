@@ -85,7 +85,7 @@ static int page_tracked(entry_t *e, int n, unsigned long a) {
 }
 
 int main(void) {
-    printf("[tc02] reinit_clears_entries\n");
+    printf("[tc02] restart_clears_entries\n");
 
     if (geteuid() != 0) { 
         fprintf(stderr, "ERROR: must run as root\n"); return 1; 
@@ -105,14 +105,15 @@ int main(void) {
 
     gpu_write_range<<<1, 100>>>(managed, 0, half);
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("[tc02] wrote pages 0..%d (pre-reinit)\n", half - 1);
+    printf("[tc02] wrote pages 0..%d (pre-restart)\n", half - 1);
 
+    stop_track();
     start_track();
-    printf("[tc02] reinit (start_track again) - old entries should be cleared\n");
+    printf("[tc02] restart (stop+start) - old entries should be cleared\n");
 
     gpu_write_range<<<1, 1>>>(managed, half, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("[tc02] wrote pages %d..%d (post-reinit)\n", half, NUM_PAGES - 1);
+    printf("[tc02] wrote pages %d..%d (post-restart)\n", half, NUM_PAGES - 1);
 
     entry_t e[MAX_ENTRIES];
     set_range_full();
@@ -122,7 +123,7 @@ int main(void) {
         printf("[tc02]   entry %d: addr=0x%lx ts=%lu\n",
                i, e[i].addr, e[i].ts);
 
-    int ghost = 0;   /* first-half pages that survived reinit (bad) */
+    int ghost = 0;   /* first-half pages that survived restart (bad) */
     int present = 0; /* second-half pages correctly recorded */
     int missing = 0; /* second-half pages not recorded (bad) */
 
@@ -142,7 +143,7 @@ int main(void) {
     int failed = (n < 0 || ghost > 0 || missing > 0);
     printf("[tc02] %s\n", failed ? "FAIL" : "PASS");
     if (n < 0)     printf("[tc02]   procfs read failed (n=%d)\n", n);
-    if (ghost > 0) printf("[tc02]   %d pre-reinit pages survived (should have been cleared)\n", ghost);
-    if (missing > 0) printf("[tc02]   %d post-reinit pages not recorded\n", missing);
+    if (ghost > 0) printf("[tc02]   %d pre-restart pages survived (should have been cleared)\n", ghost);
+    if (missing > 0) printf("[tc02]   %d post-restart pages not recorded\n", missing);
     return failed;
 }

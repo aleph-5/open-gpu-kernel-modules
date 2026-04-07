@@ -89,7 +89,7 @@ static int page_tracked(entry_t *e, int n, unsigned long a) {
 }
 
 int main(void) {
-    printf("[tc04] multi_reinit_stress (%d cycles, %d pages)\n", NUM_CYCLES, NUM_PAGES);
+    printf("[tc04] multi_restart_stress (%d cycles, %d pages)\n", NUM_CYCLES, NUM_PAGES);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
     if (NUM_CYCLES > NUM_PAGES) { fprintf(stderr, "ERROR: NUM_CYCLES > NUM_PAGES\n"); return 1; }
@@ -99,7 +99,6 @@ int main(void) {
     memset(managed, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    start_track();
 
     int total_errors = 0;
 
@@ -107,12 +106,11 @@ int main(void) {
         int cur_page  = cycle;
         int prev_page = cycle - 1;
 
-        if (cycle > 0) {
-            start_track();
-            printf("[tc04] cycle %d: reinit\n", cycle);
-        } else {
-            printf("[tc04] cycle %d: initial table\n", cycle);
-        }
+        start_track();
+        if (cycle > 0)
+            printf("[tc04] cycle %d: restart (new table)\n", cycle);
+        else
+            printf("[tc04] cycle %d: start (new table)\n", cycle);
 
         gpu_write_one_page<<<1, 1>>>(managed, cur_page);
         CUDA_CHECK(cudaDeviceSynchronize());
@@ -129,7 +127,7 @@ int main(void) {
 
         int cycle_err = 0;
         if (!cur_present) { printf("[tc04]   cycle %d: page[%d] missing (should be present)\n", cycle, cur_page); cycle_err++; }
-        if ( prev_present) { printf("[tc04]   cycle %d: page[%d] still present (should have been cleared by reinit)\n", cycle, prev_page); cycle_err++; }
+        if ( prev_present) { printf("[tc04]   cycle %d: page[%d] still present (should have been cleared by restart)\n", cycle, prev_page); cycle_err++; }
 
         printf("[tc04] cycle %d: page[%d]=%s page[%d]=%s  entries=%d  %s\n",
                cycle,
@@ -138,9 +136,9 @@ int main(void) {
                n, cycle_err ? "FAIL" : "ok");
 
         total_errors += cycle_err;
+        stop_track();
     }
 
-    stop_track();
     CUDA_CHECK(cudaFree(managed));
 
     printf("[tc04] %s (%d error(s) across %d cycles)\n",

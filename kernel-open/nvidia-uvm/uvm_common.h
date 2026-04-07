@@ -55,6 +55,10 @@ struct uvm_dirty_page_table {
     struct xarray pages;
 };
 
+bool uvm_dirty_tracking_started(void);
+
+pid_t uvm_owner_tgid_with_dirty_tracking_started(void);
+
 bool uvm_dirty_tracking_active(void);
 
 NV_STATUS uvm_dirty_set_tracking_active(bool active);

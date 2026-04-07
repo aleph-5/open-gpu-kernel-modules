@@ -59,6 +59,25 @@ static struct uvm_dirty_ds g_dirty_ds = {
 static pid_t g_dirty_owner_tgid = -1;
 // END OF EDIT
 
+bool uvm_dirty_tracking_started(void)
+{ 
+    down_read(&uvm_dirty_ds_rwsem); 
+    bool started = g_dirty_ds.priv != NULL;
+    up_read(&uvm_dirty_ds_rwsem);
+    return started;
+}
+
+pid_t uvm_owner_tgid_with_dirty_tracking_started(void)
+{
+    pid_t owner_tgid;
+
+    down_read(&uvm_dirty_ds_rwsem);
+    owner_tgid = g_dirty_owner_tgid;
+    up_read(&uvm_dirty_ds_rwsem);
+
+    return owner_tgid;
+}
+
 bool uvm_dirty_tracking_active(void)
 {
     return READ_ONCE(g_uvm_dirty_tracking_active);
@@ -75,6 +94,10 @@ pid_t uvm_owner_tgid_with_dirty_tracking_active(void)
     pid_t owner_tgid;
 
     down_read(&uvm_dirty_ds_rwsem);
+    if (!READ_ONCE(g_uvm_dirty_tracking_active)) {
+        up_read(&uvm_dirty_ds_rwsem);
+        return -1;
+    }
     owner_tgid = g_dirty_owner_tgid;
     up_read(&uvm_dirty_ds_rwsem);
 
@@ -88,11 +111,8 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid)
     down_write(&uvm_dirty_ds_rwsem);
 
     if (g_dirty_ds.priv != NULL) {
-        NV_STATUS destruction_status = uvm_dirty_page_table_destroy(true);
-        if (destruction_status != NV_OK) {
-            up_write(&uvm_dirty_ds_rwsem);
-            return NV_ERR_GENERIC;
-        }
+        up_write(&uvm_dirty_ds_rwsem);
+        return NV_ERR_IN_USE;
     }
 
     status = uvm_dirty_ds_init(&g_dirty_ds);
@@ -102,7 +122,6 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid)
     }
 
     g_dirty_owner_tgid = pid;
-    WRITE_ONCE(g_uvm_dirty_tracking_active, true);
 
     up_write(&uvm_dirty_ds_rwsem);
     return NV_OK;
@@ -291,6 +310,122 @@ UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_pages_entry);
 
 
 // EDIT BY ADITI KHANDELIA
+static ssize_t dirty_tracking_resume(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
+    
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+
+    char kbuf[16];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy)) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    kbuf[to_copy] = '\0';
+
+    if (!uvm_dirty_tracking_started()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    if (uvm_dirty_tracking_active()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    pid_t target_pid = 0;
+    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EINVAL;
+    }
+    if (target_pid != uvm_owner_tgid_with_dirty_tracking_started()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -ESRCH;
+    }
+
+    NV_STATUS status;
+
+    if (!uvm_dirty_invalidate_fn || !uvm_dirty_activate_now_fn || !uvm_dirty_barrier_end_fn) {
+        pr_err("uvm_dirty: one or more function pointers not registered\n");
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_invalidate_fn();
+    if (status != NV_OK) {
+        pr_err("uvm_dirty: invalidate fn failed for pid %d (status %d)\n", target_pid, status);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_activate_now_fn();
+    if (status != NV_OK) {
+        pr_err("uvm_dirty: activate fn failed for pid %d (status %d)\n", target_pid, status);
+        uvm_dirty_barrier_end_fn();
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    status = uvm_dirty_barrier_end_fn();
+    if (status != NV_OK) {
+        pr_err("uvm_dirty: barrier_end fn failed for pid %d (status %d)\n", target_pid, status);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return count;
+}
+
+static const struct proc_ops dirty_tracking_resume_fops = {
+    .proc_write = dirty_tracking_resume,
+};
+
+static ssize_t dirty_tracking_pause(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
+
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+
+    char kbuf[16];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy)) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    kbuf[to_copy] = '\0';
+
+    if (!uvm_dirty_tracking_started()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    if (!uvm_dirty_tracking_active()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
+    pid_t target_pid = 0;
+    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EINVAL;
+    }
+    if (target_pid != uvm_owner_tgid_with_dirty_tracking_active()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -ESRCH;
+    }
+
+    WRITE_ONCE(g_uvm_dirty_tracking_active, false);
+
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return count;
+}
+
+static const struct proc_ops dirty_tracking_pause_fops = {
+    .proc_write = dirty_tracking_pause,
+};
+
 static ssize_t dirty_tracking_start(struct file* file,
     const char __user* buf,
     size_t count,
@@ -310,6 +445,11 @@ static ssize_t dirty_tracking_start(struct file* file,
     if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
+    }
+
+    if (uvm_dirty_tracking_started()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EBUSY;
     }
 
     NV_STATUS status;
@@ -474,12 +614,17 @@ static ssize_t dirty_tracking_stop(struct file* file,
     }
     kbuf[to_copy] = '\0';
 
+    if (!uvm_dirty_tracking_started()) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+
     pid_t target_pid = 0;
     if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
-    if (target_pid != uvm_owner_tgid_with_dirty_tracking_active()) {
+    if (target_pid != uvm_owner_tgid_with_dirty_tracking_started()) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -ESRCH;
     }
@@ -633,6 +778,20 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
                         0666,
                         parent,
                         &dirty_tracking_stop_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    
+    entry = proc_create("dirty_tracking_pause",
+                        0666,
+                        parent,
+                        &dirty_tracking_pause_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    
+    entry = proc_create("dirty_tracking_resume",
+                        0666,
+                        parent,
+                        &dirty_tracking_resume_fops);
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
 

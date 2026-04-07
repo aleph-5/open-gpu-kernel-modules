@@ -294,7 +294,7 @@ static void t03_reset_clears_table(const fixture_t *fx)
 
     snprintf(out.expected,
              sizeof(out.expected),
-             "pages 0..%d absent, pages %d..%d present after reset",
+             "pages 0..%d absent, pages %d..%d present after stop+start",
              half - 1,
              half,
              NUM_PAGES - 1);
@@ -303,7 +303,8 @@ static void t03_reset_clears_table(const fixture_t *fx)
     write_range_kernel<<<1, 1>>>(fx->managed, 0, half);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    /* Start command reinitializes the table in current implementation. */
+    /* Stop+start resets the table in current implementation. */
+    stop_tracking();
     start_tracking();
     write_range_kernel<<<1, 1>>>(fx->managed, half, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -379,12 +380,13 @@ static void t05_restart_and_retrack(const fixture_t *fx)
 
     snprintf(out.expected,
              sizeof(out.expected),
-             "all pages tracked after restart + second write");
+             "all pages tracked after stop+start + second write");
 
     start_tracking();
     write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    stop_tracking();
     start_tracking();
     write_kernel<<<1, 1>>>(fx->managed, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());

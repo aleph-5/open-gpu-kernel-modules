@@ -547,7 +547,7 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
     nv_kthread_q_flush(&g_uvm_global.global_q);
 
     // EDIT BY ADITI KHANDELIA
-    if (uvm_dirty_tracking_active() && uvm_owner_tgid_with_dirty_tracking_active() == va_space->owner_tgid) {
+    if (uvm_dirty_tracking_started() && uvm_owner_tgid_with_dirty_tracking_started() == va_space->owner_tgid) {
         uvm_dirty_page_table_destroy(false);
     }
     // END OF EDIT
@@ -2877,7 +2877,7 @@ static NV_STATUS uvm_dirty_activate_now(void)
 
 static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
 {
-    pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_active();
+    pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_started();
     uvm_va_space_t *va_space = NULL;
     uvm_va_range_t *va_range;
     uvm_va_block_t *va_block = NULL;
