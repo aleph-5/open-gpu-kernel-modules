@@ -27,6 +27,12 @@ struct uvm_dirty_ds_stats {
     atomic64_t     for_each_in_range_time_ns;
     atomic_long_t  destroy_count;
     atomic64_t     destroy_time_ns;
+    // EDIT BY VIDHI JAIN
+    /* time spent blocked in down_read/down_write before each op */
+    atomic64_t     insert_lock_wait_ns;
+    atomic64_t     lookup_lock_wait_ns;
+    atomic64_t     for_each_lock_wait_ns;
+    // END OF EDIT
 };
 
 #define DIRTY_DS_STATS_READ(ds, field)   atomic_long_read(&(ds)->stats.field)
@@ -137,5 +143,23 @@ extern const struct uvm_dirty_ds_ops uvm_dirty_ds_xarray_ops;
 /* bitmap backend – defined in uvm_dirty_ds_bitmap.c */
 extern const struct uvm_dirty_ds_ops uvm_dirty_ds_bitmap_ops;
 // END OF EDIT
+
+// EDIT BY VIDHI JAIN
+
+/* vector backend – defined in uvm_dirty_ds_vector.c */
+extern const struct uvm_dirty_ds_ops uvm_dirty_ds_vector_ops;
+/* unsorted vector backend – defined in uvm_dirty_ds_vector_unsorted.c */
+extern const struct uvm_dirty_ds_ops uvm_dirty_ds_vector_unsorted_ops;
+/* chunked vector backend – defined in uvm_dirty_ds_chunked.c */
+extern const struct uvm_dirty_ds_ops uvm_dirty_ds_chunked_ops;
+/* nested bitmap backend – defined in uvm_dirty_ds_nested_bitmap.c */
+extern const struct uvm_dirty_ds_ops uvm_dirty_ds_nested_bitmap_ops;
+
+// END OF EDIT
+
+// EDIT BY SANKALP MITTAL
+extern const struct uvm_dirty_ds_ops uvm_dirty_ds_linked_list_ops;
+// END OF EDIT
+
 
 #endif /* __UVM_DIRTY_DS_H__ */

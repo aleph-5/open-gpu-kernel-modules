@@ -53,7 +53,7 @@ static bool g_uvm_dirty_tracking_active;
 
 // EDIT BY KUSHAGRA
 static struct uvm_dirty_ds g_dirty_ds = {
-    .ops  = &uvm_dirty_ds_xarray_ops,
+    .ops  = &uvm_dirty_ds_vector_ops, // VIDHI: Modified for Testing
     .priv = NULL,
 };
 static pid_t g_dirty_owner_tgid = -1;
@@ -129,8 +129,15 @@ NV_STATUS uvm_dirty_page_table_destroy(bool locked) {
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp) { // (EDIT BY VIDHI JAIN)
     NV_STATUS status;
+    ktime_t t0; // EDIT BY VIDHI JAIN
 
+    t0 = ktime_get(); // EDIT BY VIDHI JAIN
     down_read(&uvm_dirty_ds_rwsem);
+
+    // EDIT BY VIDHI JAIN
+    if (unlikely(g_dirty_ds.stats.enabled))
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t0)),
+                     &g_dirty_ds.stats.insert_lock_wait_ns);
 
     if (g_dirty_ds.priv == NULL) {
         up_read(&uvm_dirty_ds_rwsem);
@@ -143,11 +150,38 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     return status;
 }
 
+/* original lookup (no semaphore timing)
 struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
     bool locked) {
     struct dirty_page_info *info;
 
     if (!locked) down_read(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv == NULL) {
+        if (!locked) up_read(&uvm_dirty_ds_rwsem);
+        return NULL;
+    }
+
+    info = uvm_dirty_ds_lookup(&g_dirty_ds, page_number);
+
+    if (!locked) up_read(&uvm_dirty_ds_rwsem);
+    return info;
+}
+*/
+
+// EDIT BY VIDHI JAIN
+struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
+    bool locked) {
+    struct dirty_page_info *info;
+    ktime_t t0;
+
+    if (!locked) {
+        t0 = ktime_get();
+        down_read(&uvm_dirty_ds_rwsem);
+        if (unlikely(g_dirty_ds.stats.enabled))
+            atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t0)),
+                         &g_dirty_ds.stats.lookup_lock_wait_ns);
+    }
 
     if (g_dirty_ds.priv == NULL) {
         if (!locked) up_read(&uvm_dirty_ds_rwsem);
@@ -200,9 +234,20 @@ static void procfs_print_page(unsigned long page_num, unsigned long timestamp,
 }
 // END OF EDIT
 
+/* original procfs reader (no semaphore timing)
 static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
 {
     down_read(&uvm_dirty_ds_rwsem);
+*/
+
+// EDIT BY VIDHI JAIN
+static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
+{
+    ktime_t t0 = ktime_get();
+    down_read(&uvm_dirty_ds_rwsem);
+    if (unlikely(g_dirty_ds.stats.enabled))
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t0)),
+                     &g_dirty_ds.stats.for_each_lock_wait_ns);
 
     if (g_dirty_ds.priv == NULL) {
         seq_printf(s, "# dirty tracking not active\n");
@@ -322,6 +367,8 @@ static const struct proc_ops dirty_tracking_start_fops = {
  * Write accumulated stats to UVM_DIRTY_DS_STATS_FILE.
  * Called once when dirty tracking stops — no I/O during the experiment.
  */
+
+/* original stats flush (no lock wait fields)
 static void uvm_dirty_ds_stats_flush(void)
 {
     struct file *f;
@@ -350,6 +397,53 @@ static void uvm_dirty_ds_stats_flush(void)
         ic, it, ic ? it / ic : 0,
         lc, lt, lc ? lt / lc : 0,
         fc, ft, fc ? ft / fc : 0,
+        DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
+        DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns),
+        DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
+        DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+
+    f = filp_open(UVM_DIRTY_DS_STATS_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (IS_ERR(f)) {
+        pr_warn("uvm: could not open stats file %s\n", UVM_DIRTY_DS_STATS_FILE);
+        return;
+    }
+    kernel_write(f, buf, len, &pos);
+    filp_close(f, NULL);
+}
+*/
+
+// EDIT BY VIDHI JAIN
+static void uvm_dirty_ds_stats_flush(void)
+{
+    struct file *f;
+    char buf[1024];
+    int len;
+    loff_t pos = 0;
+    long ic, lc, fc;
+    s64 it, lt, ft, ilw, llw, flw;
+
+    if (!g_dirty_ds.stats.enabled)
+        return;
+
+    ic  = DIRTY_DS_STATS_READ(&g_dirty_ds, insert_count);
+    lc  = DIRTY_DS_STATS_READ(&g_dirty_ds, lookup_count);
+    fc  = DIRTY_DS_STATS_READ(&g_dirty_ds, for_each_in_range_count);
+    it  = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_time_ns);
+    lt  = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_time_ns);
+    ft  = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_in_range_time_ns);
+    ilw = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_lock_wait_ns);
+    llw = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_lock_wait_ns);
+    flw = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_lock_wait_ns);
+
+    len = snprintf(buf, sizeof(buf),
+        "insert:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
+        "lookup:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
+        "for_each_in_range: count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
+        "init:              count=%ld  total_ns=%lld\n"
+        "destroy:           count=%ld  total_ns=%lld\n",
+        ic, ic ? it / ic : 0, ic ? ilw / ic : 0,
+        lc, lc ? lt / lc : 0, lc ? llw / lc : 0,
+        fc, fc ? ft / fc : 0, fc ? flw / fc : 0,
         DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
         DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns),
         DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
@@ -402,6 +496,7 @@ static const struct proc_ops dirty_tracking_stop_fops = {
 
 // END OF EDIT
 
+/* original procfs stats reader (no lock wait fields)
 static int nv_procfs_read_dirty_ds_stats(struct seq_file *s, void *v)
 {
     long ic = DIRTY_DS_STATS_READ(&g_dirty_ds, insert_count);
@@ -426,6 +521,37 @@ static int nv_procfs_read_dirty_ds_stats(struct seq_file *s, void *v)
                DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
     return 0;
 }
+*/
+
+// EDIT BY VIDHI JAIN
+static int nv_procfs_read_dirty_ds_stats(struct seq_file *s, void *v)
+{
+    long ic  = DIRTY_DS_STATS_READ(&g_dirty_ds, insert_count);
+    long lc  = DIRTY_DS_STATS_READ(&g_dirty_ds, lookup_count);
+    long fc  = DIRTY_DS_STATS_READ(&g_dirty_ds, for_each_in_range_count);
+    s64  it  = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_time_ns);
+    s64  lt  = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_time_ns);
+    s64  ft  = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_in_range_time_ns);
+    s64  ilw = DIRTY_DS_STATS_READ64(&g_dirty_ds, insert_lock_wait_ns);
+    s64  llw = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_lock_wait_ns);
+    s64  flw = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_lock_wait_ns);
+
+    seq_printf(s, "enabled:           %d\n", g_dirty_ds.stats.enabled);
+    seq_printf(s, "insert:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n",
+               ic, ic ? it / ic : 0, ic ? ilw / ic : 0);
+    seq_printf(s, "lookup:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n",
+               lc, lc ? lt / lc : 0, lc ? llw / lc : 0);
+    seq_printf(s, "for_each_in_range: count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n",
+               fc, fc ? ft / fc : 0, fc ? flw / fc : 0);
+    seq_printf(s, "init:              count=%ld  total_ns=%lld\n",
+               DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
+               DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns));
+    seq_printf(s, "destroy:           count=%ld  total_ns=%lld\n",
+               DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
+               DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+    return 0;
+}
+// END OF EDIT
 
 static int nv_procfs_read_dirty_ds_stats_entry(struct seq_file *s, void *v)
 {
@@ -459,6 +585,11 @@ static ssize_t dirty_ds_stats_toggle(struct file *file,
         atomic64_set(&g_dirty_ds.stats.init_time_ns, 0);
         atomic_long_set(&g_dirty_ds.stats.destroy_count, 0);
         atomic64_set(&g_dirty_ds.stats.destroy_time_ns, 0);
+        // EDIT BY VIDHI JAIN
+        atomic64_set(&g_dirty_ds.stats.insert_lock_wait_ns, 0);
+        atomic64_set(&g_dirty_ds.stats.lookup_lock_wait_ns, 0);
+        atomic64_set(&g_dirty_ds.stats.for_each_lock_wait_ns, 0);
+        // END OF EDIT
     }
     else if (strncmp(kbuf, "disable", 7) == 0)
         g_dirty_ds.stats.enabled = false;

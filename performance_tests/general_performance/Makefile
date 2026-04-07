@@ -1,7 +1,7 @@
 NVCC      = nvcc
 NVCCFLAGS = -O2 -lm
 
-SRCS = tc02_performance_overhead.cu
+SRCS = tc02_performance_overhead.cu tc03_random_write_overhead.cu
 BINS = $(SRCS:.cu=)
 
 all: $(BINS)
