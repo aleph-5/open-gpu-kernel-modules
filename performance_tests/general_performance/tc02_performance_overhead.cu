@@ -104,6 +104,7 @@ static void tracking_off(void) {
 static void reset_table(void)  {
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
+    procfs_write(PROCFS_STOP, buf);
     procfs_write(PROCFS_START, buf);
 }
 
@@ -152,7 +153,8 @@ static bench_t run_bench(int *managed, int *sink_dev,
 
     if (tracking) {
         tracking_on();
-    } else {
+    } 
+    else {
         launch_kernel(wl, managed, num_ints, sink_dev);
         CUDA_CHECK(cudaDeviceSynchronize());
     }

@@ -352,14 +352,32 @@ static ssize_t dirty_tracking_resume(struct file* file,
         return -EFAULT;
     }
 
-    status = uvm_dirty_invalidate_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_invalidate_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.invalidate_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.invalidate_count);
+    } else {
+        status = uvm_dirty_invalidate_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: invalidate fn failed for pid %d (status %d)\n", target_pid, status);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EFAULT;
     }
 
-    status = uvm_dirty_activate_now_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_activate_now_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.activate_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.activate_count);
+    } else {
+        status = uvm_dirty_activate_now_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: activate fn failed for pid %d (status %d)\n", target_pid, status);
         uvm_dirty_barrier_end_fn();
@@ -367,7 +385,16 @@ static ssize_t dirty_tracking_resume(struct file* file,
         return -EFAULT;
     }
 
-    status = uvm_dirty_barrier_end_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_barrier_end_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.barrier_end_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.barrier_end_count);
+    } else {
+        status = uvm_dirty_barrier_end_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: barrier_end fn failed for pid %d (status %d)\n", target_pid, status);
         mutex_unlock(&uvm_dirty_lifecycle_lock);
@@ -466,7 +493,16 @@ static ssize_t dirty_tracking_start(struct file* file,
         return -EFAULT;
     }
 
-    status = uvm_dirty_invalidate_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_invalidate_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.invalidate_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.invalidate_count);
+    } else {
+        status = uvm_dirty_invalidate_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: invalidate fn failed for pid %d (status %d) — is the pid a valid tgid with a UVM va_space open?\n",
                target_pid, status);
@@ -475,7 +511,16 @@ static ssize_t dirty_tracking_start(struct file* file,
         return -EFAULT;
     }
 
-    status = uvm_dirty_activate_now_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_activate_now_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.activate_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.activate_count);
+    } else {
+        status = uvm_dirty_activate_now_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: activate fn failed for pid %d (status %d)\n", target_pid, status);
         uvm_dirty_barrier_end_fn();
@@ -484,7 +529,16 @@ static ssize_t dirty_tracking_start(struct file* file,
         return -EFAULT;
     }
 
-    status = uvm_dirty_barrier_end_fn();
+    // EDIT BY SANKALP MITTAL
+    if (unlikely(g_dirty_ds.stats.enabled)) {
+        ktime_t t_cb = ktime_get();
+        status = uvm_dirty_barrier_end_fn();
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t_cb)), &g_dirty_ds.stats.barrier_end_time_ns);
+        atomic_long_inc(&g_dirty_ds.stats.barrier_end_count);
+    } else {
+        status = uvm_dirty_barrier_end_fn();
+    }
+    // END OF EDIT
     if (status != NV_OK) {
         pr_err("uvm_dirty: barrier_end fn failed for pid %d (status %d)\n", target_pid, status);
         uvm_dirty_page_table_destroy(false);
@@ -556,7 +610,7 @@ static void uvm_dirty_ds_stats_flush(void)
 static void uvm_dirty_ds_stats_flush(void)
 {
     struct file *f;
-    char buf[1024];
+    char buf[1280];
     int len;
     loff_t pos = 0;
     long ic, lc, fc;
@@ -575,19 +629,36 @@ static void uvm_dirty_ds_stats_flush(void)
     llw = DIRTY_DS_STATS_READ64(&g_dirty_ds, lookup_lock_wait_ns);
     flw = DIRTY_DS_STATS_READ64(&g_dirty_ds, for_each_lock_wait_ns);
 
+    // EDIT BY SANKALP MITTAL
+    long invc = DIRTY_DS_STATS_READ(&g_dirty_ds, invalidate_count);
+    long actc = DIRTY_DS_STATS_READ(&g_dirty_ds, activate_count);
+    long barc = DIRTY_DS_STATS_READ(&g_dirty_ds, barrier_end_count);
+    s64  invt = DIRTY_DS_STATS_READ64(&g_dirty_ds, invalidate_time_ns);
+    s64  actt = DIRTY_DS_STATS_READ64(&g_dirty_ds, activate_time_ns);
+    s64  bart = DIRTY_DS_STATS_READ64(&g_dirty_ds, barrier_end_time_ns);
+    // END OF EDIT
+
     len = snprintf(buf, sizeof(buf),
         "insert:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
         "lookup:            count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
         "for_each_in_range: count=%ld  avg_ns=%lld  avg_lock_wait_ns=%lld\n"
         "init:              count=%ld  total_ns=%lld\n"
-        "destroy:           count=%ld  total_ns=%lld\n",
+        "destroy:           count=%ld  total_ns=%lld\n"
+        "invalidate:        count=%ld  avg_ns=%lld\n"
+        "activate_now:      count=%ld  avg_ns=%lld\n"
+        "barrier_end:       count=%ld  avg_ns=%lld\n",
         ic, ic ? it / ic : 0, ic ? ilw / ic : 0,
         lc, lc ? lt / lc : 0, lc ? llw / lc : 0,
         fc, fc ? ft / fc : 0, fc ? flw / fc : 0,
         DIRTY_DS_STATS_READ(&g_dirty_ds, init_count),
         DIRTY_DS_STATS_READ64(&g_dirty_ds, init_time_ns),
         DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
-        DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+        DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns),
+        // EDIT BY SANKALP MITTAL
+        invc, invc ? invt / invc : 0,
+        actc, actc ? actt / actc : 0,
+        barc, barc ? bart / barc : 0);
+        // END OF EDIT
 
     f = filp_open(UVM_DIRTY_DS_STATS_FILE, O_WRONLY | O_CREAT | O_TRUNC, 0644);
     if (IS_ERR(f)) {
@@ -694,6 +765,22 @@ static int nv_procfs_read_dirty_ds_stats(struct seq_file *s, void *v)
     seq_printf(s, "destroy:           count=%ld  total_ns=%lld\n",
                DIRTY_DS_STATS_READ(&g_dirty_ds, destroy_count),
                DIRTY_DS_STATS_READ64(&g_dirty_ds, destroy_time_ns));
+    // EDIT BY SANKALP MITTAL
+    {
+        long invc = DIRTY_DS_STATS_READ(&g_dirty_ds, invalidate_count);
+        long actc = DIRTY_DS_STATS_READ(&g_dirty_ds, activate_count);
+        long barc = DIRTY_DS_STATS_READ(&g_dirty_ds, barrier_end_count);
+        s64  invt = DIRTY_DS_STATS_READ64(&g_dirty_ds, invalidate_time_ns);
+        s64  actt = DIRTY_DS_STATS_READ64(&g_dirty_ds, activate_time_ns);
+        s64  bart = DIRTY_DS_STATS_READ64(&g_dirty_ds, barrier_end_time_ns);
+        seq_printf(s, "invalidate:        count=%ld  avg_ns=%lld\n",
+                   invc, invc ? invt / invc : 0);
+        seq_printf(s, "activate_now:      count=%ld  avg_ns=%lld\n",
+                   actc, actc ? actt / actc : 0);
+        seq_printf(s, "barrier_end:       count=%ld  avg_ns=%lld\n",
+                   barc, barc ? bart / barc : 0);
+    }
+    // END OF EDIT
     return 0;
 }
 // END OF EDIT
@@ -734,6 +821,14 @@ static ssize_t dirty_ds_stats_toggle(struct file *file,
         atomic64_set(&g_dirty_ds.stats.insert_lock_wait_ns, 0);
         atomic64_set(&g_dirty_ds.stats.lookup_lock_wait_ns, 0);
         atomic64_set(&g_dirty_ds.stats.for_each_lock_wait_ns, 0);
+        // END OF EDIT
+        // EDIT BY SANKALP MITTAL
+        atomic_long_set(&g_dirty_ds.stats.invalidate_count, 0);
+        atomic64_set(&g_dirty_ds.stats.invalidate_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.activate_count, 0);
+        atomic64_set(&g_dirty_ds.stats.activate_time_ns, 0);
+        atomic_long_set(&g_dirty_ds.stats.barrier_end_count, 0);
+        atomic64_set(&g_dirty_ds.stats.barrier_end_time_ns, 0);
         // END OF EDIT
     }
     else if (strncmp(kbuf, "disable", 7) == 0)

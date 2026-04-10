@@ -33,6 +33,14 @@ struct uvm_dirty_ds_stats {
     atomic64_t     lookup_lock_wait_ns;
     atomic64_t     for_each_lock_wait_ns;
     // END OF EDIT
+    // EDIT BY SANKALP MITTAL
+    atomic_long_t  invalidate_count;
+    atomic64_t     invalidate_time_ns;
+    atomic_long_t  activate_count;
+    atomic64_t     activate_time_ns;
+    atomic_long_t  barrier_end_count;
+    atomic64_t     barrier_end_time_ns;
+    // END OF EDIT
 };
 
 #define DIRTY_DS_STATS_READ(ds, field)   atomic_long_read(&(ds)->stats.field)
