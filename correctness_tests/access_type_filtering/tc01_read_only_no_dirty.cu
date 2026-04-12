@@ -118,10 +118,13 @@ int main(void)
         managed[i] = i;
     CUDA_CHECK(cudaDeviceSynchronize());
 
+    /* Use pinned host memory for result so it is NOT UVM-managed.
+     * cudaMallocManaged would cause the GPU's atomicAdd to trigger a
+     * UVM write fault
+     */
     long long *result = NULL;
-    CUDA_CHECK(cudaMallocManaged(&result, sizeof(long long)));
+    CUDA_CHECK(cudaHostAlloc(&result, sizeof(long long), cudaHostAllocDefault));
     *result = 0;
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     printf("[tc01] pid=%d alloc=0x%lx\n", getpid(), (unsigned long)managed);
 
@@ -142,7 +145,7 @@ int main(void)
     printf("[tc01] dump entries: n=%d (want 0)\n", n);
 
     stop_track();
-    CUDA_CHECK(cudaFree(result));
+    CUDA_CHECK(cudaFreeHost(result));
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n != 0);

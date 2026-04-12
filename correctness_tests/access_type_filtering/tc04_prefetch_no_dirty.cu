@@ -130,9 +130,8 @@ int main(void)
     CUDA_CHECK(cudaDeviceSynchronize());
 
     long long *sink = NULL;
-    CUDA_CHECK(cudaMallocManaged(&sink, sizeof(long long)));
+    CUDA_CHECK(cudaHostAlloc(&sink, sizeof(long long), cudaHostAllocDefault));
     *sink = 0;
-    CUDA_CHECK(cudaDeviceSynchronize());
 
     unsigned long base = (unsigned long)managed;
     printf("[tc04] pid=%d alloc=0x%lx device=%d\n", getpid(), base, device);
@@ -140,8 +139,9 @@ int main(void)
     int rc = start_track_delta();
     if (rc) { fprintf(stderr, "[tc04] start failed: %s\n", strerror(-rc)); return 1; }
 
-    /* Prefetch to GPU — migration, NOT a write fault. */
-    CUDA_CHECK(cudaMemPrefetchAsync(managed, NUM_PAGES * PAGE_SIZE, device, 0));
+    // Prefetch to GPU — migration, NOT a write fault
+    cudaMemLocation loc = {cudaMemLocationTypeDevice, device};
+    CUDA_CHECK(cudaMemPrefetchAsync(managed, NUM_PAGES * PAGE_SIZE, loc, 0));
 
     /* Read-only kernel. */
     gpu_read_all<<<1, 1>>>(managed, NUM_PAGES, sink);
@@ -175,7 +175,7 @@ int main(void)
     printf("[tc04] epoch2 (write): n=%d w_found=%d/%d (want %d)\n", n2, w_found, NUM_PAGES, NUM_PAGES);
 
     stop_track();
-    CUDA_CHECK(cudaFree(sink));
+    CUDA_CHECK(cudaFreeHost(sink));
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n1 != 0 || w_found != NUM_PAGES);
