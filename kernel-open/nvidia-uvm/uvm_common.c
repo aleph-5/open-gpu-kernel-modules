@@ -31,17 +31,16 @@
 #endif
 // END OF EDIT
 
-// EDIT BY VIDHI JAIN
-static DEFINE_SPINLOCK(dirty_query_lock); // ( EDIT BY ADITI KHANDELIA)
-static unsigned long dirty_query_start = 0UL;
-static unsigned long dirty_query_end = ~0UL;
-// END OF EDIT
-
 // EDIT BY ARUSH
 // Registered from uvm_va_space.c at module init; NULL until then.
 NV_STATUS (*uvm_dirty_invalidate_fn)(void) = NULL;
 NV_STATUS (*uvm_dirty_activate_now_fn)(void) = NULL;
 NV_STATUS (*uvm_dirty_barrier_end_fn)(void) = NULL;
+// END OF EDIT
+
+// EDIT BY ADITI KHANDELIA
+NV_STATUS (*uvm_dirty_query_barrier_begin_fn)(void) = NULL;
+NV_STATUS (*uvm_dirty_query_barrier_end_fn)(void) = NULL;
 // END OF EDIT
 
 // EDIT BY ADITI KHANDELIA
@@ -56,8 +55,23 @@ static struct uvm_dirty_ds g_dirty_ds = {
     .ops  = &uvm_dirty_ds_vector_ops, // VIDHI: Modified for Testing
     .priv = NULL,
 };
+// EDIT BY ADITI KHANDELIA
+static struct uvm_dirty_ds g_dirty_ds_snapshot = {
+    .ops  = &uvm_dirty_ds_vector_ops, 
+    .priv = NULL,
+};
+static struct uvm_dirty_ds g_dirty_ds_cumulative = {
+    .ops  = &uvm_dirty_ds_vector_ops, 
+    .priv = NULL,
+};
+static unsigned int g_dirty_epoch = 0; 
+static unsigned int g_dirty_snapshot_epoch = 0;
+static bool g_snapshot_pending = false;
 static pid_t g_dirty_owner_tgid = -1;
+static enum uvm_dirty_tracking_querying_state g_dirty_tracking_querying_state = UVM_DIRTY_TRACKING_QUERY_DELTA;
 // END OF EDIT
+// END OF EDIT
+
 
 bool uvm_dirty_tracking_started(void)
 { 
@@ -121,12 +135,20 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid)
         return status;
     }
 
+    if (g_dirty_tracking_querying_state == UVM_DIRTY_TRACKING_QUERY_CUMULATIVE) {
+        status = uvm_dirty_ds_init(&g_dirty_ds_cumulative);
+        if (status != NV_OK) {
+            uvm_dirty_ds_destroy(&g_dirty_ds);
+            up_write(&uvm_dirty_ds_rwsem);
+            return status;
+        }
+    }
+
     g_dirty_owner_tgid = pid;
 
     up_write(&uvm_dirty_ds_rwsem);
     return NV_OK;
 }
-
 
 NV_STATUS uvm_dirty_page_table_destroy(bool locked) {
     if (!locked) down_write(&uvm_dirty_ds_rwsem);
@@ -139,10 +161,30 @@ NV_STATUS uvm_dirty_page_table_destroy(bool locked) {
     }
 
     uvm_dirty_ds_destroy(&g_dirty_ds);
+
+    if (g_dirty_ds_snapshot.priv != NULL) {
+        uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
+    }
+
+    if (g_dirty_ds_cumulative.priv != NULL) {
+        uvm_dirty_ds_destroy(&g_dirty_ds_cumulative);
+    }
+
+    g_dirty_tracking_querying_state = UVM_DIRTY_TRACKING_QUERY_DELTA;
     g_dirty_owner_tgid = -1;
+    g_snapshot_pending = false;
+    g_dirty_epoch = 0;
+    g_dirty_snapshot_epoch = 0;
 
     if (!locked) up_write(&uvm_dirty_ds_rwsem);
     return NV_OK;
+}
+
+NV_STATUS uvm_dirty_page_table_destroy_lifecycle_locked(void) {
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+    NV_STATUS status = uvm_dirty_page_table_destroy(false);
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return status;
 }
 
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
@@ -168,6 +210,68 @@ NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     up_read(&uvm_dirty_ds_rwsem);
     return status;
 }
+
+// EDIT BY ADITI KHANDELIA
+static NV_STATUS uvm_dirty_new_snapshot(struct uvm_dirty_ds* dest) {
+    struct uvm_dirty_ds new_live = {
+        .ops  = g_dirty_ds.ops,
+        .priv = NULL,
+        .stats = {0},
+    };
+
+    if (g_dirty_ds.priv == NULL) {
+        return NV_ERR_GENERIC;
+    }
+
+    new_live.stats.enabled = g_dirty_ds.stats.enabled;
+
+
+    if (uvm_dirty_ds_init(&new_live) != NV_OK) {
+        return NV_ERR_GENERIC;
+    }
+
+    *dest = new_live;
+    return NV_OK;
+}
+
+struct uvm_dirty_merge_ctx {
+    struct uvm_dirty_ds *dst;
+    NV_STATUS status;
+};
+
+static void uvm_dirty_merge_snapshot_page(unsigned long page_num,
+    unsigned long timestamp,
+    void *ctx) {
+    struct uvm_dirty_merge_ctx *merge_ctx = ctx;
+    if (merge_ctx->status != NV_OK) {
+        return;
+    }
+    merge_ctx->status = uvm_dirty_ds_insert(merge_ctx->dst, page_num, timestamp);
+}
+
+static NV_STATUS uvm_dirty_merge_snapshot_into_cumulative_locked(void) {
+    struct uvm_dirty_merge_ctx ctx = {
+        .dst = &g_dirty_ds_cumulative,
+        .status = NV_OK,
+    };
+
+    if (g_dirty_ds_snapshot.priv == NULL) {
+        return NV_OK;
+    }
+
+    if (g_dirty_ds_cumulative.priv == NULL) {
+        return NV_ERR_GENERIC;
+    }
+
+    uvm_dirty_ds_for_each_in_range(&g_dirty_ds_snapshot,
+        0,
+        ~0UL,
+        uvm_dirty_merge_snapshot_page,
+        &ctx);
+
+    return ctx.status;
+}
+// END OF EDIT
 
 /* original lookup (no semaphore timing)
 struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
@@ -214,35 +318,6 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number,
 }
 // END OF EDIT
 
-// EDIT BY VIDHI JAIN
-static ssize_t dirty_range_write(struct file *file,
-                                 const char __user *buf,
-                                 size_t count,
-                                 loff_t *ppos)
-{
-    char kbuf[64];
-
-    // EDIT BY SANKALP MITTAL
-    size_t to_copy = min(count, sizeof(kbuf) - 1); // Safety in case of large input
-    if(copy_from_user(kbuf, buf, to_copy))
-        return -EFAULT;
-    kbuf[to_copy] = '\0';
-    // END OF EDIT
-
-    spin_lock(&dirty_query_lock);
-    sscanf(kbuf, "%lx %lx", &dirty_query_start, &dirty_query_end);
-
-    spin_unlock(&dirty_query_lock);
-    
-    return count;
-}
-
-static const struct proc_ops dirty_range_fops = {
-    .proc_write = dirty_range_write,
-};
-
-// END OF EDIT
-
 // EDIT BY ARUSH - procfs query interface
 // EDIT BY KUSHAGRA
 static void procfs_print_page(unsigned long page_num, unsigned long timestamp,
@@ -253,63 +328,175 @@ static void procfs_print_page(unsigned long page_num, unsigned long timestamp,
 }
 // END OF EDIT
 
-/* original procfs reader (no semaphore timing)
-static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
-{
-    down_read(&uvm_dirty_ds_rwsem);
-*/
+// EDIT BY ADITI KHANDELIA
+static int nv_procfs_read_dirty_tracking_query_dump(struct seq_file *s, 
+    void *v) {
 
-// EDIT BY VIDHI JAIN
-static int nv_procfs_read_dirty_pages(struct seq_file *s, void *__v)
-{
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+    NV_STATUS status;
+    bool ds_read_locked = false;
+    int ret = 0;
+
+    if (!g_snapshot_pending || g_dirty_ds_snapshot.priv == NULL) {
+        ret = -EFAULT;
+        goto out;
+    }
+
+    if (!uvm_dirty_tracking_started()) {
+        ret = -EFAULT;
+        goto out;
+    }
+
+    down_read(&uvm_dirty_ds_rwsem);
+    ds_read_locked = true;
+
+    if (g_dirty_tracking_querying_state == UVM_DIRTY_TRACKING_QUERY_CUMULATIVE) {
+        status = uvm_dirty_merge_snapshot_into_cumulative_locked();
+        if (status != NV_OK) {
+            ret = -nv_status_to_errno(status);
+            goto out;
+        }
+    }
+
+    struct uvm_dirty_ds *query_ds =
+        (g_dirty_tracking_querying_state == UVM_DIRTY_TRACKING_QUERY_CUMULATIVE) ?
+            &g_dirty_ds_cumulative :
+            &g_dirty_ds_snapshot;
+
     ktime_t t0 = ktime_get();
-    down_read(&uvm_dirty_ds_rwsem);
-    if (unlikely(g_dirty_ds.stats.enabled))
-        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t0)),
-                     &g_dirty_ds.stats.for_each_lock_wait_ns);
+    if (unlikely(query_ds->stats.enabled)) {
+        atomic64_add(ktime_to_ns(ktime_sub(ktime_get(), t0)), &query_ds->stats.for_each_lock_wait_ns);
+    }
 
-    if (g_dirty_ds.priv == NULL) {
+    if (query_ds->priv == NULL) {
         seq_printf(s, "# dirty tracking not active\n");
-        up_read(&uvm_dirty_ds_rwsem);
-        return 0;
+        goto out;
     }
 
     seq_printf(s, "# page_address_hex timestamp_ns\n");
 
-    // EDIT BY VIDHI JAIN
-
-    spin_lock(&dirty_query_lock);
-    unsigned long start_index = dirty_query_start >> PAGE_SHIFT;
-    unsigned long end_index = (dirty_query_end - 1) >> PAGE_SHIFT;
-    spin_unlock(&dirty_query_lock);
-
-    // EDIT BY ADITI KHANDELIA
-    if (dirty_query_end <= dirty_query_start) {
-        seq_printf(s, "# invalid range: start 0x%lx is greater than end 0x%lx\n",
-                   dirty_query_start, dirty_query_end);
-        up_read(&uvm_dirty_ds_rwsem);
-        return 0;
-    }
-    // END OF EDIT
-
-    // EDIT BY KUSHAGRA
-    uvm_dirty_ds_for_each_in_range(&g_dirty_ds, start_index, end_index,
-                                    procfs_print_page, s);
-    // END OF EDIT
-
+    uvm_dirty_ds_for_each_in_range(query_ds, 0, ~0UL, procfs_print_page, s);
     up_read(&uvm_dirty_ds_rwsem);
-    return 0;
+    ds_read_locked = false;
+
+    uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
+    g_snapshot_pending = false;
+    goto out;
+
+out:
+    if (ds_read_locked) {
+        up_read(&uvm_dirty_ds_rwsem);
+    }
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return ret;
 }
 
-static int nv_procfs_read_dirty_pages_entry(struct seq_file *s, void *v)
+static int nv_procfs_read_dirty_tracking_query_dump_entry(struct seq_file *s, void *v)
 {
-    return nv_procfs_read_dirty_pages(s, v);
+    return nv_procfs_read_dirty_tracking_query_dump(s, v);
 }
 
-UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_pages_entry);
+UVM_DEFINE_SINGLE_PROCFS_FILE(dirty_tracking_query_dump_entry);
 
+static ssize_t dirty_tracking_query_cutover(struct file* file,
+    const char __user* buf,
+    size_t count,
+    loff_t* ppos) {
 
-// EDIT BY ADITI KHANDELIA
+    if (!uvm_dirty_tracking_started()) {
+        return -EFAULT;
+    }
+
+    char kbuf[16];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    if (copy_from_user(kbuf, buf, to_copy)) {
+        return -EFAULT;
+    }
+    kbuf[to_copy] = '\0';
+    pid_t target_pid = 0;
+    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
+        return -EINVAL;
+    }
+    if (target_pid != uvm_owner_tgid_with_dirty_tracking_started()) {
+        return -ESRCH;
+    }
+
+    NV_STATUS status;
+    bool query_barrier_held = false;
+    bool ds_write_locked = false;
+    int ret = 0;
+
+    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn) {
+        return -EFAULT;
+    }
+
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+
+    if (g_snapshot_pending) {
+        ret = -EBUSY;
+        goto out;
+    }
+
+    struct uvm_dirty_ds new_live;
+    status = uvm_dirty_new_snapshot(&new_live);
+    if (status != NV_OK) {
+        ret = -nv_status_to_errno(status);
+        goto out;
+    }
+
+    struct uvm_dirty_ds old_snapshot = g_dirty_ds_snapshot; 
+
+    down_read(&uvm_dirty_ds_rwsem);
+    if (g_dirty_ds.priv == NULL) {
+        up_read(&uvm_dirty_ds_rwsem);
+        uvm_dirty_ds_destroy(&new_live);
+        ret = -EFAULT;
+        goto out;
+    }
+    up_read(&uvm_dirty_ds_rwsem);
+
+    status = uvm_dirty_query_barrier_begin_fn();
+    if (status != NV_OK) {
+        ret = -nv_status_to_errno(status);
+        uvm_dirty_ds_destroy(&new_live);
+        goto out;
+    }
+    query_barrier_held = true;
+
+    down_write(&uvm_dirty_ds_rwsem);
+    ds_write_locked = true;
+    g_dirty_ds_snapshot = g_dirty_ds;
+    g_dirty_ds = new_live;
+    g_dirty_epoch += 1;
+    g_dirty_snapshot_epoch = g_dirty_epoch;
+    g_snapshot_pending = true;
+    up_write(&uvm_dirty_ds_rwsem);
+    ds_write_locked = false;
+
+    uvm_dirty_query_barrier_end_fn();
+    query_barrier_held = false;
+
+    if (old_snapshot.priv != NULL) {
+        uvm_dirty_ds_destroy(&old_snapshot);
+    }
+
+    goto out;
+
+out:
+    if (ds_write_locked)
+        up_write(&uvm_dirty_ds_rwsem);
+
+    if (query_barrier_held)
+        uvm_dirty_query_barrier_end_fn();
+
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return ret == 0 ? count : ret;
+}
+
+static const struct proc_ops dirty_tracking_query_cutover_fops = {
+    .proc_write = dirty_tracking_query_cutover,
+};
+
 static ssize_t dirty_tracking_resume(struct file* file,
     const char __user* buf,
     size_t count,
@@ -460,7 +647,8 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
-    char kbuf[16];
+    // input should be of the form <pid> <delta/cumulative>
+    char kbuf[32];
     size_t to_copy = min(count, sizeof(kbuf) - 1);
     if (copy_from_user(kbuf, buf, to_copy)) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
@@ -469,7 +657,8 @@ static ssize_t dirty_tracking_start(struct file* file,
     kbuf[to_copy] = '\0';
 
     pid_t target_pid = 0;
-    if (sscanf(kbuf, "%d", &target_pid) != 1 || target_pid <= 0) {
+    char querying_state_str[16];
+    if (sscanf(kbuf, "%d %15s", &target_pid, querying_state_str) != 2 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
@@ -477,6 +666,15 @@ static ssize_t dirty_tracking_start(struct file* file,
     if (uvm_dirty_tracking_started()) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EBUSY;
+    }
+
+    if (strcmp(querying_state_str, "delta") == 0) {
+        g_dirty_tracking_querying_state = UVM_DIRTY_TRACKING_QUERY_DELTA;
+    } else if (strcmp(querying_state_str, "cumulative") == 0) {
+        g_dirty_tracking_querying_state = UVM_DIRTY_TRACKING_QUERY_CUMULATIVE;
+    } else {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EINVAL;
     }
 
     NV_STATUS status;
@@ -702,6 +900,7 @@ static ssize_t dirty_tracking_stop(struct file* file,
 
     uvm_dirty_page_table_destroy(false);
     uvm_dirty_ds_stats_flush();
+    g_snapshot_pending = false;
     mutex_unlock(&uvm_dirty_lifecycle_lock);
     return count;
 }
@@ -847,19 +1046,10 @@ static const struct proc_ops dirty_ds_stats_toggle_fops = {
 NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
 {
     struct proc_dir_entry *entry;
-
-    entry = NV_CREATE_PROC_FILE("dirty_pages", parent, dirty_pages_entry, NULL);
-    if (entry == NULL)
-        return NV_ERR_OPERATING_SYSTEM;
     
-    // EDIT BY VIDHI JAIN
-    entry = proc_create("dirty_range",
-                        0666,
-                        parent,
-                        &dirty_range_fops);
-    if(entry == NULL)
-        return NV_ERR_OPERATING_SYSTEM;
-    // END OF EDIT
+    entry = NV_CREATE_PROC_FILE("dirty_tracking_query_dump", parent, dirty_tracking_query_dump_entry, NULL); 
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;   
 
     // EDIT BY ADITI KHANDELIA
     entry = proc_create("dirty_tracking_start",
@@ -887,6 +1077,13 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
                         0666,
                         parent,
                         &dirty_tracking_resume_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+
+    entry = proc_create("dirty_tracking_query_cutover",
+                        0666,
+                        parent,
+                        &dirty_tracking_query_cutover_fops);
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
 

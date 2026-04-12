@@ -55,6 +55,11 @@ struct uvm_dirty_page_table {
     struct xarray pages;
 };
 
+enum uvm_dirty_tracking_querying_state {
+    UVM_DIRTY_TRACKING_QUERY_DELTA = 0,
+    UVM_DIRTY_TRACKING_QUERY_CUMULATIVE = 1,
+};
+
 bool uvm_dirty_tracking_started(void);
 
 pid_t uvm_owner_tgid_with_dirty_tracking_started(void);
@@ -69,6 +74,8 @@ NV_STATUS uvm_dirty_page_table_init(pid_t pid);
 
 NV_STATUS uvm_dirty_page_table_destroy(bool locked);
 
+NV_STATUS uvm_dirty_page_table_destroy_lifecycle_locked(void);
+
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number, unsigned long timestamp);
 
 struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, bool locked);
@@ -79,6 +86,11 @@ struct dirty_page_info* uvm_dirty_page_table_lookup(unsigned long page_number, b
 extern NV_STATUS(*uvm_dirty_invalidate_fn)(void);
 extern NV_STATUS(*uvm_dirty_activate_now_fn)(void);
 extern NV_STATUS(*uvm_dirty_barrier_end_fn)(void);
+// END OF EDIT
+
+// EDIT BY ADITI KHANDELIA
+extern NV_STATUS (*uvm_dirty_query_barrier_begin_fn)(void);
+extern NV_STATUS (*uvm_dirty_query_barrier_end_fn)(void);
 // END OF EDIT
 
 #if defined(CONFIG_PROC_FS) 

@@ -548,7 +548,8 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
 
     // EDIT BY ADITI KHANDELIA
     if (uvm_dirty_tracking_started() && uvm_owner_tgid_with_dirty_tracking_started() == va_space->owner_tgid) {
-        uvm_dirty_page_table_destroy(false);
+        if (uvm_dirty_page_table_destroy_lifecycle_locked() != NV_OK)
+            UVM_ASSERT_MSG(false, "Failed to destroy dirty page table for va_space with owner tgid %d", va_space->owner_tgid);
     }
     // END OF EDIT
 
@@ -2813,17 +2814,151 @@ static void uvm_dirty_invalidate_all_gpu_mappings(void)
 
 // EDIT BY SANKALP MITTAL
 // EDIT BY ADITI KHANDELIA
+typedef struct {
+    uvm_va_space_t *owner_va_space;
+    uvm_parent_gpu_t *locked_parent_gpus[UVM_PARENT_ID_MAX_GPUS];
+    size_t num_locked_parent_gpus;
+    bool begin_done;
+} uvm_dirty_query_barrier_ctx_t;
+
+static uvm_dirty_query_barrier_ctx_t g_uvm_dirty_query_barrier_ctx;
+
+static bool uvm_dirty_query_barrier_pending_locked(uvm_dirty_query_barrier_ctx_t *ctx) {
+    size_t i;
+
+    for (i = 0; i < ctx->num_locked_parent_gpus; i++) {
+        if (uvm_parent_gpu_replayable_faults_pending(ctx->locked_parent_gpus[i])) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static NV_STATUS uvm_dirty_query_barrier_begin(void) {
+    uvm_dirty_query_barrier_ctx_t *ctx = &g_uvm_dirty_query_barrier_ctx;
+    uvm_va_space_t *va_space;
+    uvm_gpu_t *gpu;
+    uvm_parent_gpu_id_t parent_id;
+    uvm_parent_gpu_t *parent_gpu_table[UVM_PARENT_ID_MAX_GPUS];
+    uvm_spin_loop_t spin;
+    pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_started();
+    int owner_count;
+    const NvU64 timeout_ns = 5ULL * 1000 * 1000 * 1000;
+
+    ctx->owner_va_space = NULL;
+    ctx->num_locked_parent_gpus = 0;
+    ctx->begin_done = false;
+
+    if (owner_tgid == -1)
+        return NV_ERR_GENERIC;
+
+    uvm_spin_loop_init(&spin);
+
+    for (;;) {
+        owner_count = 0;
+        ctx->owner_va_space = NULL;
+        memset(parent_gpu_table, 0, sizeof(parent_gpu_table));
+
+        uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
+
+        list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
+            if (va_space->owner_tgid != owner_tgid)
+                continue;
+
+            ctx->owner_va_space = va_space;
+            ++owner_count;
+        }
+
+        if (owner_count != 1) {
+            ctx->owner_va_space = NULL;
+            goto fail;
+        }
+
+        uvm_va_space_down_read(ctx->owner_va_space);
+
+        for_each_va_space_gpu(gpu, ctx->owner_va_space)
+            parent_gpu_table[uvm_parent_id_gpu_index(gpu->parent->id)] = gpu->parent;
+
+        for_each_parent_gpu_id(parent_id) {
+            uvm_parent_gpu_t *parent_gpu = parent_gpu_table[uvm_parent_id_gpu_index(parent_id)];
+
+            if (!parent_gpu)
+                continue;
+
+            uvm_parent_gpu_replayable_faults_isr_lock(parent_gpu);
+            ctx->locked_parent_gpus[ctx->num_locked_parent_gpus++] = parent_gpu;
+        }
+
+        if (!uvm_dirty_query_barrier_pending_locked(ctx)) {
+            ctx->begin_done = true;
+            return NV_OK;
+        }
+
+        while (ctx->num_locked_parent_gpus > 0)
+            uvm_parent_gpu_replayable_faults_isr_unlock(ctx->locked_parent_gpus[--ctx->num_locked_parent_gpus]);
+
+        uvm_va_space_up_read(ctx->owner_va_space);
+        uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+        ctx->owner_va_space = NULL;
+
+        if (fatal_signal_pending(current))
+            return NV_ERR_SIGNAL_PENDING;
+
+        if (uvm_spin_loop_elapsed(&spin) >= timeout_ns)
+            return NV_ERR_TIMEOUT;
+
+        UVM_SPIN_LOOP(&spin);
+    }
+
+fail:
+    while (ctx->num_locked_parent_gpus > 0)
+        uvm_parent_gpu_replayable_faults_isr_unlock(ctx->locked_parent_gpus[--ctx->num_locked_parent_gpus]);
+
+    if (ctx->owner_va_space)
+        uvm_va_space_up_read(ctx->owner_va_space);
+
+    uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+    ctx->owner_va_space = NULL;
+    ctx->begin_done = false;
+    return NV_ERR_GENERIC;
+}
+
+static NV_STATUS uvm_dirty_query_barrier_end(void) {
+    uvm_dirty_query_barrier_ctx_t *ctx = &g_uvm_dirty_query_barrier_ctx;
+
+    if (!ctx->begin_done) {
+        return NV_OK;
+    }
+
+    while (ctx->num_locked_parent_gpus > 0) {
+        uvm_parent_gpu_replayable_faults_isr_unlock(ctx->locked_parent_gpus[--ctx->num_locked_parent_gpus]);
+    }
+
+    if (ctx->owner_va_space) {
+        uvm_va_space_up_read(ctx->owner_va_space);
+    }
+
+    uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+
+    ctx->owner_va_space = NULL;
+    ctx->begin_done = false;
+    ctx->num_locked_parent_gpus = 0;
+
+    return NV_OK;
+}
+
 typedef struct
 {
     uvm_va_space_t *owner_va_space;
     uvm_va_block_context_t *block_ctx;
     bool begin_done;
-} uvm_dirty_barrier_ctx_t;
+} uvm_dirty_start_barrier_ctx_t;
 
-static uvm_dirty_barrier_ctx_t g_uvm_dirty_barrier_ctx;
+static uvm_dirty_start_barrier_ctx_t g_uvm_dirty_start_barrier_ctx;
 
 static NV_STATUS uvm_dirty_barrier_begin(pid_t owner_tgid,
-    uvm_dirty_barrier_ctx_t *ctx,
+    uvm_dirty_start_barrier_ctx_t *ctx,
     uvm_va_block_context_t *block_ctx)
 {
     uvm_va_space_t *va_space;
@@ -2855,7 +2990,7 @@ static NV_STATUS uvm_dirty_barrier_begin(pid_t owner_tgid,
 
 static NV_STATUS uvm_dirty_barrier_end(void)
 {
-    uvm_dirty_barrier_ctx_t *ctx = &g_uvm_dirty_barrier_ctx;
+    uvm_dirty_start_barrier_ctx_t *ctx = &g_uvm_dirty_start_barrier_ctx;
 
     if (ctx->begin_done) {
         if(ctx->owner_va_space) {
@@ -2898,11 +3033,11 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
         goto out;
     }
 
-    status = uvm_dirty_barrier_begin(owner_tgid, &g_uvm_dirty_barrier_ctx, block_ctx);
+    status = uvm_dirty_barrier_begin(owner_tgid, &g_uvm_dirty_start_barrier_ctx, block_ctx);
     if (status != NV_OK)
         goto out;
 
-    va_space = g_uvm_dirty_barrier_ctx.owner_va_space;
+    va_space = g_uvm_dirty_start_barrier_ctx.owner_va_space;
     uvm_va_space_down_write(va_space);
 
     uvm_for_each_va_range(va_range, va_space) {
@@ -2961,5 +3096,7 @@ void uvm_va_space_dirty_init(void)
     uvm_dirty_invalidate_fn = uvm_dirty_downgrade_all_permissions;
     uvm_dirty_activate_now_fn = uvm_dirty_activate_now;
     uvm_dirty_barrier_end_fn = uvm_dirty_barrier_end;
+    uvm_dirty_query_barrier_begin_fn = uvm_dirty_query_barrier_begin;
+    uvm_dirty_query_barrier_end_fn = uvm_dirty_query_barrier_end;
 }
 // END OF EDIT
