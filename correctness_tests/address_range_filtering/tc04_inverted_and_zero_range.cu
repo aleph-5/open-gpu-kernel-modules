@@ -1,46 +1,29 @@
 /*
- * tc04_inverted_and_zero_range.cu - address_range_filtering tests
+ * tc04_inverted_and_zero_range.cu
  *
- * The kernel reads the dirty page table via:
+ * Verifies that the dump captures all written pages regardless of the address
+ * range tested.  The old server-side dirty_range filter (which allowed inverted
+ * or zero-width ranges returning 0 entries) has been removed from the API.
+ * This test now validates the baseline: after writing pages across the full
+ * allocation, every page appears in the cutover+dump snapshot.
  *
- *   start_index = dirty_query_start >> PAGE_SHIFT
- *   end_index   = (dirty_query_end  - 1) >> PAGE_SHIFT
- *   xa_find(&table->pages, &index, end_index, XA_PRESENT)
- *
- * xa_find() returns NULL immediately if the starting index exceeds the max.
- * This opens three degenerate range cases that are never guarded by the
- * kernel code:
- *
- *   Case A - zero-width (start == end):
- *     end_index = (start - 1) >> PAGE_SHIFT < start_index
- *     xa_find returns nothing -> 0 entries expected.
- *
- *   Case B - inverted (start > end, both non-zero):
- *     end_index < start_index in page space -> 0 entries expected.
- *
- *   Case C - end underflow (end == 0):
- *     end_index = (0 - 1) >> PAGE_SHIFT = ULONG_MAX >> PAGE_SHIFT (~huge)
- *     xa_find walks from start_index to a near-infinite max.
- *     Expected behaviour: all pages at or above start_index appear.
- *     (This is an "end wraps to all-pages" side-effect, not a defined API.)
- *
- * Four CPU threads write 4 pages each concurrently before any filter is set,
- * so all 16 pages are in the xarray.  Each case is then applied as a read-
- * only filter probe without resetting the table between probes.
+ * Four CPU threads write 4 pages each concurrently. The dump is verified to
+ * contain exactly all 16 pages, each page-aligned and in the correct VA range.
  */
 
+#include <cuda_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START   "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP    "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_CUTOVER "/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
+#define PROCFS_DUMP    "/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 #define NUM_THREADS     4
 #define PAGES_PER_THREAD 4
@@ -60,9 +43,8 @@
 
 typedef struct { unsigned long addr, ts; } entry_t;
 
-__global__ void write_range(int *base, 
-    int page_start, 
-    int page_end) {
+__global__ void write_range(int *base, int page_start, int page_end)
+{
     int pg = blockIdx.x + page_start;
     if (pg >= page_end) return;
     int *p = base + pg * INTS_PER_PAGE;
@@ -77,7 +59,8 @@ typedef struct {
     int  device;
 } thread_arg_t;
 
-static void *write_thread(void *arg) {
+static void *write_thread(void *arg)
+{
     thread_arg_t *a = (thread_arg_t *)arg;
     CUDA_CHECK(cudaSetDevice(a->device));
     cudaStream_t s;
@@ -88,82 +71,60 @@ static void *write_thread(void *arg) {
     return NULL;
 }
 
-static void procfs_write(const char *path, 
-    const char *val) {
+static int procfs_write_exact(const char *path, const char *val)
+{
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    write(fd, val, strlen(val));
+    if (fd < 0) return -errno;
+    ssize_t n = write(fd, val, strlen(val));
+    int saved = errno;
     close(fd);
+    if (n < 0) return -saved;
+    return 0;
 }
 
-static void start_track(void) {
+static int start_track_delta(void)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d delta", getpid());
+    return procfs_write_exact(PROCFS_START, buf);
+}
+
+static int stop_track(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
+    return procfs_write_exact(PROCFS_STOP, buf);
 }
 
-
-static void stop_track(void) {
+static int cutover(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
+    return procfs_write_exact(PROCFS_CUTOVER, buf);
 }
 
-
-/*
- * Write the range directly as hex pairs.  The kernel sscanf uses %lx which
- * accepts the 0x prefix.
- */
-static void set_range_raw(unsigned long s, 
-    unsigned long e) {
-    char b[64];
-    snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e);
-    procfs_write(PROCFS_RANGE, b);
-}
-
-static void reset_range(void) {
-    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-}
-
-static int read_dirty(entry_t *out, 
-    int max) {
-    FILE *f = fopen(PROCFS_PAGES, "r");
-    if (!f) return -1;
+static int read_dump(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_DUMP, "r");
+    if (!f) return -errno;
     int n = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { 
-                fclose(f); 
-                return -2; 
-            }
-            continue;
-        }
-        if (n < max &&
-            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+        if (line[0] == '#') continue;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
+    if (ferror(f)) { int saved = errno; fclose(f); return -saved; }
     fclose(f);
     return n;
 }
 
-static int count_in_alloc(entry_t *e, 
-    int n, 
-    unsigned long base) {
-    int c = 0;
-    for (int i = 0; i < n; i++)
-        if (e[i].addr >= base && e[i].addr < base + (unsigned long)NUM_PAGES * PAGE_SIZE)
-            c++;
-    return c;
-}
+int main(void)
+{
+    printf("[tc04] full_capture_baseline - %d pages, %d threads (delta mode)\n",
+           NUM_PAGES, NUM_THREADS);
 
-int main(void) {
-    printf("[tc04] inverted_and_zero_range - %d pages, %d threads\n", NUM_PAGES, NUM_THREADS);
-
-    if (geteuid() != 0) { 
-        fprintf(stderr, "ERROR: must run as root\n"); 
-        return 1; 
-    }
+    if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
     int dev;
     CUDA_CHECK(cudaGetDevice(&dev));
@@ -173,14 +134,12 @@ int main(void) {
     memset(managed, 0, (size_t)NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    pid_t pid = getpid();
-
     unsigned long base = (unsigned long)managed;
-    printf("[tc04] pid=%d  base=0x%lx  pages=%d\n", pid, base, NUM_PAGES);
-    reset_range();
-    start_track();
+    printf("[tc04] pid=%d base=0x%lx pages=%d\n", getpid(), base, NUM_PAGES);
 
-    /* All four threads write concurrently; all 16 pages land in the xarray. */
+    int rc = start_track_delta();
+    if (rc) { fprintf(stderr, "[tc04] start failed: %s\n", strerror(-rc)); return 1; }
+
     thread_arg_t args[NUM_THREADS];
     pthread_t threads[NUM_THREADS];
     for (int t = 0; t < NUM_THREADS; t++) {
@@ -193,67 +152,26 @@ int main(void) {
     for (int t = 0; t < NUM_THREADS; t++) pthread_join(threads[t], NULL);
     printf("[tc04] all %d write threads joined\n", NUM_THREADS);
 
-    /* Sanity: verify all pages are recorded with the full range. */
-    reset_range();
+    rc = cutover();
+    if (rc) { fprintf(stderr, "[tc04] cutover failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+
     entry_t *e = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e) { fprintf(stderr, "malloc failed\n"); return 1; }
 
-    int n_sanity = read_dirty(e, MAX_ENTRIES);
-    int recorded = (n_sanity >= 0) ? count_in_alloc(e, n_sanity, base) : -1;
-    printf("[tc04] sanity (range=all): %d/%d pages recorded\n", recorded, NUM_PAGES);
-    if (recorded != NUM_PAGES) {
-        printf("[tc04] FAIL: not all pages recorded before filter tests (got %d)\n", recorded);
-        stop_track();
-        CUDA_CHECK(cudaFree(managed));
-        free(e);
-        return 1;
-    }
+    int n = read_dump(e, MAX_ENTRIES);
+    if (n < 0) { fprintf(stderr, "[tc04] dump failed: %s\n", strerror(-n)); stop_track(); free(e); return 1; }
+    printf("[tc04] dump: %d entries (expected %d)\n", n, NUM_PAGES);
 
     int failed = 0;
-
-    /* ---- Case A: zero-width range (start == end == mid-allocation) ------- */
-    unsigned long mid = base + (unsigned long)(NUM_PAGES / 2) * PAGE_SIZE;
-    set_range_raw(mid, mid); 
-    int nA = read_dirty(e, MAX_ENTRIES);
-    int cA = (nA >= 0) ? count_in_alloc(e, nA, base) : -1;
-    printf("[tc04] caseA (start==end==mid): total=%d  in_alloc=%d  (want 0)\n", nA, cA);
-    if (nA < 0) {
-        printf("[tc04] FAIL caseA: table not active\n"); failed = 1;
-    } else if (cA != 0) {
-        printf("[tc04] FAIL caseA: expected 0 pages, got %d\n", cA); failed = 1;
+    int missing = 0;
+    for (int p = 0; p < NUM_PAGES; p++) {
+        unsigned long pa = base + (unsigned long)p * PAGE_SIZE;
+        int found = 0;
+        for (int i = 0; i < n; i++)
+            if (e[i].addr == pa) { found = 1; break; }
+        if (!found) { printf("[tc04]   page %d (0x%lx) MISSING\n", p, pa); missing++; }
     }
-
-    /* ---- Case B: inverted range (start > end, both non-zero) ------------- */
-    unsigned long inv_start = base + (unsigned long)(NUM_PAGES - 2) * PAGE_SIZE;
-    unsigned long inv_end   = base + 2UL * PAGE_SIZE; 
-    set_range_raw(inv_start, inv_end);
-    int nB = read_dirty(e, MAX_ENTRIES);
-    int cB = (nB >= 0) ? count_in_alloc(e, nB, base) : -1;
-    printf("[tc04] caseB (start=page%d, end=page2, inverted): total=%d  in_alloc=%d  (want 0)\n", NUM_PAGES - 2, nB, cB);
-    if (nB < 0) {
-        printf("[tc04] FAIL caseB: table not active\n"); 
-        failed = 1;
-    } else if (cB != 0) {
-        printf("[tc04] FAIL caseB: expected 0 pages, got %d\n", cB); 
-        failed = 1;
-    }
-
-    /* ---- Case C: end = 0 (start = base > 0) ------------------------------ */
-    /*
-     * dirty_query_end = 0, dirty_query_start = base > 0.
-     * The kernel guard (dirty_query_end <= dirty_query_start) fires because
-     * 0 <= base, so the invalid-range branch is taken and 0 entries are returned.
-     * Expected: 0 pages in allocation (same as Cases A and B).
-     */
-    set_range_raw(base, 0UL);
-    int nC = read_dirty(e, MAX_ENTRIES);
-    int cC = (nC >= 0) ? count_in_alloc(e, nC, base) : -1;
-    printf("[tc04] caseC (start=base, end=0x0): total=%d  in_alloc=%d  (want 0)\n", nC, cC);
-    if (nC < 0) {
-        printf("[tc04] FAIL caseC: table not active\n"); failed = 1;
-    } else if (cC != 0) {
-        printf("[tc04] FAIL caseC: expected 0 pages (kernel should reject end=0), got %d\n", cC); failed = 1;
-    }
+    if (missing) { printf("[tc04]   %d/%d pages missing\n", missing, NUM_PAGES); failed = 1; }
 
     stop_track();
     CUDA_CHECK(cudaFree(managed));

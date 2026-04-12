@@ -1,36 +1,30 @@
 /*
- * tc01_two_alloc_range_isolation.cu - address_range_filtering tests
+ * tc01_two_alloc_range_isolation.cu
  *
- * Two CPU threads each launch a GPU write kernel against their own managed
- * allocation (alloc_a, alloc_b) via separate CUDA streams, all within the
- * same process.  Both allocations are tracked in the same global table
- * because dirty tracking is pid-less.
+ * Two managed allocations are written under a single delta tracking session.
+ * After cutover+dump, all pages from both allocations appear in the snapshot.
+ * Client-side range filtering (by address) is used to verify that each
+ * allocation's pages are independently identifiable and do not bleed into each
+ * other's address range.
  *
- * After both writes complete, the dirty_range filter is probed in two phases:
- *
- *   Phase 1 - range set to [alloc_a_base, alloc_a_base + alloc_size):
- *     Expected: alloc_a pages present, alloc_b pages absent.
- *     This checks that the filter correctly excludes pages outside the range
- *     even when two allocations are stored in the same xarray.
- *
- *   Phase 2 - range reset to full address space (no table reset):
- *     Expected: pages from BOTH allocations present.
- *     This confirms entries are not consumed by the Phase 1 read, i.e.
- *     the procfs read is non-destructive.
+ * NOTE: The old server-side dirty_range filter has been removed from the API.
+ * Filtering is now done in the test after dump (client-side). The kernel stores
+ * all pages and returns them all on dump; the user selects the range of interest.
  */
 
+#include <cuda_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START   "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP    "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_CUTOVER "/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
+#define PROCFS_DUMP    "/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 #define NUM_PAGES     16
 #define PAGE_SIZE     4096
@@ -49,7 +43,6 @@
 
 typedef struct { unsigned long addr, ts; } entry_t;
 
-/* One block, 256 threads - each thread covers a strided range of ints. */
 __global__ void write_pages(int *data, int n) {
     for (int i = threadIdx.x; i < n; i += blockDim.x)
         data[i] = i + 1;
@@ -60,9 +53,9 @@ typedef struct {
     int  device;
 } thread_arg_t;
 
-static void *write_thread(void *arg) {
+static void *write_thread(void *arg)
+{
     thread_arg_t *a = (thread_arg_t *)arg;
-    /* Attach this CPU thread to the primary CUDA context. */
     CUDA_CHECK(cudaSetDevice(a->device));
     cudaStream_t s;
     CUDA_CHECK(cudaStreamCreate(&s));
@@ -72,60 +65,57 @@ static void *write_thread(void *arg) {
     return NULL;
 }
 
-static void procfs_write(const char *path, const char *val) {
+static int procfs_write_exact(const char *path, const char *val)
+{
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    write(fd, val, strlen(val));
+    if (fd < 0) return -errno;
+    ssize_t n = write(fd, val, strlen(val));
+    int saved = errno;
     close(fd);
+    if (n < 0) return -saved;
+    return 0;
 }
 
-static void start_track(void) {
+static int start_track_delta(void)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d delta", getpid());
+    return procfs_write_exact(PROCFS_START, buf);
+}
+
+static int stop_track(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
+    return procfs_write_exact(PROCFS_STOP, buf);
 }
 
-
-static void stop_track(void) {
+static int cutover(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
+    return procfs_write_exact(PROCFS_CUTOVER, buf);
 }
 
-
-/*
- * dirty_range_write uses sscanf(kbuf, "%lx %lx", ...) - %lx handles the 0x
- * prefix, and dirty_query_end is exclusive (kernel does (end-1)>>PAGE_SHIFT).
- */
-static void set_range(unsigned long s, unsigned long e) {
-    char b[64];
-    snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e);
-    procfs_write(PROCFS_RANGE, b);
-}
-
-static void reset_range(void) {
-    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-}
-
-static int read_dirty(entry_t *out, int max) {
-    FILE *f = fopen(PROCFS_PAGES, "r");
-    if (!f) return -1;
+static int read_dump(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_DUMP, "r");
+    if (!f) return -errno;
     int n = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { fclose(f); return -2; }
-            continue;
-        }
-        if (n < max &&
-            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+        if (line[0] == '#') continue;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
+    if (ferror(f)) { int saved = errno; fclose(f); return -saved; }
     fclose(f);
     return n;
 }
 
-static int count_in_alloc(entry_t *e, int n, unsigned long base) {
+/* Count pages that fall inside [base, base + NUM_PAGES*PAGE_SIZE). */
+static int count_in_alloc(entry_t *e, int n, unsigned long base)
+{
     int c = 0;
     for (int i = 0; i < n; i++)
         if (e[i].addr >= base && e[i].addr < base + NUM_PAGES * PAGE_SIZE)
@@ -133,13 +123,11 @@ static int count_in_alloc(entry_t *e, int n, unsigned long base) {
     return c;
 }
 
-int main(void) {
-    printf("[tc01] two_alloc_range_isolation - %d pages per alloc, 2 threads\n", NUM_PAGES);
+int main(void)
+{
+    printf("[tc01] two_alloc_range_isolation - %d pages per alloc (delta mode)\n", NUM_PAGES);
 
-    if (geteuid() != 0) { 
-        fprintf(stderr, "ERROR: must run as root\n"); 
-        return 1; 
-    }
+    if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
     int dev;
     CUDA_CHECK(cudaGetDevice(&dev));
@@ -151,15 +139,14 @@ int main(void) {
     memset(alloc_b, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    pid_t pid = getpid();
-
     unsigned long base_a = (unsigned long)alloc_a;
     unsigned long base_b = (unsigned long)alloc_b;
-    printf("[tc01] pid=%d  alloc_a=0x%lx  alloc_b=0x%lx  pages=%d each\n", pid, base_a, base_b, NUM_PAGES);
-    reset_range();
-    start_track();
+    printf("[tc01] pid=%d alloc_a=0x%lx alloc_b=0x%lx pages=%d each\n",
+           getpid(), base_a, base_b, NUM_PAGES);
 
-    /* Two CPU threads launch concurrent GPU writes to separate allocations. */
+    int rc = start_track_delta();
+    if (rc) { fprintf(stderr, "[tc01] start failed: %s\n", strerror(-rc)); return 1; }
+
     thread_arg_t args[2] = { { alloc_a, dev }, { alloc_b, dev } };
     pthread_t threads[2];
     for (int t = 0; t < 2; t++)
@@ -168,63 +155,40 @@ int main(void) {
         pthread_join(threads[t], NULL);
     printf("[tc01] both write threads joined\n");
 
+    rc = cutover();
+    if (rc) { fprintf(stderr, "[tc01] cutover failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+
     entry_t *e = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e) { fprintf(stderr, "malloc failed\n"); return 1; }
 
-    /* ---- Phase 1: range = alloc_a only ---------------------------------- */
-    set_range(base_a, base_a + (unsigned long)NUM_PAGES * PAGE_SIZE);
-    int n1   = read_dirty(e, MAX_ENTRIES);
-    int a_p1 = (n1 >= 0) ? count_in_alloc(e, n1, base_a) : -1;
-    int b_p1 = (n1 >= 0) ? count_in_alloc(e, n1, base_b) : -1;
-    printf("[tc01] phase1 (range=alloc_a): total=%d  in_a=%d (want %d)  in_b=%d (want 0)\n",
-           n1, a_p1, NUM_PAGES, b_p1);
+    int n = read_dump(e, MAX_ENTRIES);
+    if (n < 0) { fprintf(stderr, "[tc01] dump failed: %s\n", strerror(-n)); stop_track(); free(e); return 1; }
 
-    /* ---- Phase 2: reset range - both allocs should be visible ----------- */
-    reset_range();
-    int n2   = read_dirty(e, MAX_ENTRIES);
-    int a_p2 = (n2 >= 0) ? count_in_alloc(e, n2, base_a) : -1;
-    int b_p2 = (n2 >= 0) ? count_in_alloc(e, n2, base_b) : -1;
-    printf("[tc01] phase2 (range=all):    total=%d  in_a=%d (want %d)  in_b=%d (want %d)\n",
-           n2, a_p2, NUM_PAGES, b_p2, NUM_PAGES);
+    /* Client-side range filtering: count pages per allocation. */
+    int in_a = count_in_alloc(e, n, base_a);
+    int in_b = count_in_alloc(e, n, base_b);
+
+    printf("[tc01] total dump entries: %d\n", n);
+    printf("[tc01] in alloc_a: %d (want %d)\n", in_a, NUM_PAGES);
+    printf("[tc01] in alloc_b: %d (want %d)\n", in_b, NUM_PAGES);
+
+    /* Verify no overlap: no page appears in both allocations' ranges. */
+    int overlap = 0;
+    for (int i = 0; i < n; i++) {
+        int in_range_a = (e[i].addr >= base_a && e[i].addr < base_a + NUM_PAGES * PAGE_SIZE);
+        int in_range_b = (e[i].addr >= base_b && e[i].addr < base_b + NUM_PAGES * PAGE_SIZE);
+        if (in_range_a && in_range_b) overlap++;
+    }
 
     stop_track();
     CUDA_CHECK(cudaFree(alloc_a));
     CUDA_CHECK(cudaFree(alloc_b));
     free(e);
 
-    int failed = 0;
-
-    if (n1 < 0) {
-        printf("[tc01] FAIL: phase1 table not active (n=%d)\n", n1);
-        failed = 1;
-    } else {
-        if (a_p1 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase1 alloc_a - %d/%d pages missing\n",
-                   NUM_PAGES - a_p1, NUM_PAGES);
-            failed = 1;
-        }
-        if (b_p1 != 0) {
-            printf("[tc01] FAIL: phase1 alloc_b leaked through filter (%d pages)\n", b_p1);
-            failed = 1;
-        }
-    }
-
-    if (n2 < 0) {
-        printf("[tc01] FAIL: phase2 table not active (n=%d)\n", n2);
-        failed = 1;
-    } else {
-        if (a_p2 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase2 alloc_a - %d/%d pages missing (non-destructive read?)\n",
-                   NUM_PAGES - a_p2, NUM_PAGES);
-            failed = 1;
-        }
-        if (b_p2 != NUM_PAGES) {
-            printf("[tc01] FAIL: phase2 alloc_b - %d/%d pages missing\n",
-                   NUM_PAGES - b_p2, NUM_PAGES);
-            failed = 1;
-        }
-    }
-
+    int failed = (in_a != NUM_PAGES || in_b != NUM_PAGES || overlap != 0);
     printf("[tc01] %s\n", failed ? "FAIL" : "PASS");
+    if (in_a != NUM_PAGES) printf("[tc01]   alloc_a: %d/%d pages missing\n", NUM_PAGES - in_a, NUM_PAGES);
+    if (in_b != NUM_PAGES) printf("[tc01]   alloc_b: %d/%d pages missing\n", NUM_PAGES - in_b, NUM_PAGES);
+    if (overlap)            printf("[tc01]   %d pages appear in both ranges (impossible)\n", overlap);
     return failed;
 }

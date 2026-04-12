@@ -1,41 +1,28 @@
 /*
- * tc02_range_sequential_reads_threaded.cu - address_range_filtering tests
+ * tc02_range_sequential_reads_threaded.cu
  *
- * A single managed allocation is divided into 4 equal quarters (Q0..Q3).
- * Four CPU threads each launch a GPU write kernel to their own quarter via
- * separate CUDA streams, all dispatched concurrently.
+ * Four CPU threads launch concurrent GPU writes to distinct quarters of one
+ * allocation. After all writes complete, a single cutover+dump is taken.
+ * Verifies that concurrent writes from all four threads are fully captured in
+ * one snapshot and that client-side quarter-range filtering is correct.
  *
- * After all writes complete, the dirty_range filter is applied in two
- * successive reads WITHOUT resetting the tracking table between them:
- *
- *   Read 1 - range = [Q0_base, Q2_base)  (quarters 0 and 1 only):
- *     Expected: Q0 and Q1 pages present, Q2 and Q3 pages absent.
- *
- *   Read 2 - range = [Q2_base, Q4_base)  (quarters 2 and 3 only):
- *     Expected: Q0 and Q1 pages absent, Q2 and Q3 pages present.
- *
- * This probes two things simultaneously:
- *   a) Entries written by concurrent faults are all recorded and persist
- *      across reads (non-destructive, entries survive in the xarray).
- *   b) Changing the global dirty_range filter between reads produces the
- *      correct independent view of the same snapshot each time.
- *
- * The concurrent write phase stresses the fault handler's xarray insertion
- * path before the range filter is exercised.
+ * (The old server-side dirty_range filter has been removed; range isolation
+ * is now done by the test after the dump.)
  */
 
+#include <cuda_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <pthread.h>
-#include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START   "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP    "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_CUTOVER "/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
+#define PROCFS_DUMP    "/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 #define NUM_QUARTERS        4
 #define PAGES_PER_QUARTER   16
@@ -55,11 +42,8 @@
 
 typedef struct { unsigned long addr, ts; } entry_t;
 
-/*
- * Write all ints in [page_start, page_end) pages of data.
- * One block per quarter; threads within the block cover the ints stride.
- */
-__global__ void write_quarter(int *base, int page_start, int page_end) {
+__global__ void write_quarter(int *base, int page_start, int page_end)
+{
     int pg = blockIdx.x + page_start;
     if (pg >= page_end) return;
     int *p = base + pg * INTS_PER_PAGE;
@@ -73,7 +57,8 @@ typedef struct {
     int  device;
 } thread_arg_t;
 
-static void *write_thread(void *arg) {
+static void *write_thread(void *arg)
+{
     thread_arg_t *a = (thread_arg_t *)arg;
     int ps = a->quarter_idx * PAGES_PER_QUARTER;
     int pe = ps + PAGES_PER_QUARTER;
@@ -86,76 +71,68 @@ static void *write_thread(void *arg) {
     return NULL;
 }
 
-static void procfs_write(const char *path, const char *val) {
+static int procfs_write_exact(const char *path, const char *val)
+{
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    write(fd, val, strlen(val));
+    if (fd < 0) return -errno;
+    ssize_t n = write(fd, val, strlen(val));
+    int saved = errno;
     close(fd);
+    if (n < 0) return -saved;
+    return 0;
 }
 
-static void start_track(void) {
+static int start_track_delta(void)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d delta", getpid());
+    return procfs_write_exact(PROCFS_START, buf);
+}
+
+static int stop_track(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
+    return procfs_write_exact(PROCFS_STOP, buf);
 }
 
-
-static void stop_track(void) {
+static int cutover(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
+    return procfs_write_exact(PROCFS_CUTOVER, buf);
 }
 
-
-static void set_range(unsigned long s, unsigned long e) {
-    char b[64];
-    snprintf(b, sizeof(b), "0x%lx 0x%lx\n", s, e);
-    procfs_write(PROCFS_RANGE, b);
-}
-
-static void reset_range(void) {
-    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-}
-
-static int read_dirty(entry_t *out, int max) {
-    FILE *f = fopen(PROCFS_PAGES, "r");
-    if (!f) return -1;
+static int read_dump(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_DUMP, "r");
+    if (!f) return -errno;
     int n = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { fclose(f); return -2; }
-            continue;
-        }
-        if (n < max &&
-            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+        if (line[0] == '#') continue;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
+    if (ferror(f)) { int saved = errno; fclose(f); return -saved; }
     fclose(f);
     return n;
 }
 
-/*
- * Returns the number of tracked pages that fall inside the given quarter.
- * Also separately counts pages that should NOT be in the quarter (out_count).
- */
-static void tally_quarter(entry_t *e, int n, unsigned long base, int q,
-                           int *present, int *absent) {
+static int count_in_quarter(entry_t *e, int n, unsigned long base, int q)
+{
     unsigned long q_base = base + (unsigned long)q * PAGES_PER_QUARTER * PAGE_SIZE;
-    *present = 0;
-    /* count distinct pages in quarter that appear in e[] */
-    for (int p = 0; p < PAGES_PER_QUARTER; p++) {
-        unsigned long paddr = q_base + (unsigned long)p * PAGE_SIZE;
-        for (int i = 0; i < n; i++) {
-            if (e[i].addr == paddr) { (*present)++; break; }
-        }
-    }
-    *absent = PAGES_PER_QUARTER - *present;
+    unsigned long q_end  = q_base + PAGES_PER_QUARTER * PAGE_SIZE;
+    int c = 0;
+    for (int i = 0; i < n; i++)
+        if (e[i].addr >= q_base && e[i].addr < q_end) c++;
+    return c;
 }
 
-int main(void) {
-    printf("[tc02] range_sequential_reads_threaded - %d quarters x %d pages, %d threads\n",
-           NUM_QUARTERS, PAGES_PER_QUARTER, NUM_QUARTERS);
+int main(void)
+{
+    printf("[tc02] range_sequential_reads_threaded - %d quarters x %d pages (delta mode)\n",
+           NUM_QUARTERS, PAGES_PER_QUARTER);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
@@ -167,19 +144,12 @@ int main(void) {
     memset(managed, 0, (size_t)TOTAL_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    pid_t pid = getpid();
-
     unsigned long base = (unsigned long)managed;
-    printf("[tc02] pid=%d  base=0x%lx  total_pages=%d\n", pid, base, TOTAL_PAGES);
-    for (int q = 0; q < NUM_QUARTERS; q++)
-        printf("[tc02]   Q%d: 0x%lx - 0x%lx\n",
-               q,
-               base + (unsigned long)q * PAGES_PER_QUARTER * PAGE_SIZE,
-               base + (unsigned long)(q + 1) * PAGES_PER_QUARTER * PAGE_SIZE);
-    reset_range();
-    start_track();
+    printf("[tc02] pid=%d base=0x%lx total_pages=%d\n", getpid(), base, TOTAL_PAGES);
 
-    /* Four CPU threads launch concurrent GPU writes to their respective quarters. */
+    int rc = start_track_delta();
+    if (rc) { fprintf(stderr, "[tc02] start failed: %s\n", strerror(-rc)); return 1; }
+
     thread_arg_t args[NUM_QUARTERS];
     pthread_t threads[NUM_QUARTERS];
     for (int q = 0; q < NUM_QUARTERS; q++) {
@@ -192,86 +162,31 @@ int main(void) {
         pthread_join(threads[q], NULL);
     printf("[tc02] all %d write threads joined\n", NUM_QUARTERS);
 
+    rc = cutover();
+    if (rc) { fprintf(stderr, "[tc02] cutover failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+
     entry_t *e = (entry_t *)malloc(MAX_ENTRIES * sizeof(entry_t));
     if (!e) { fprintf(stderr, "malloc failed\n"); return 1; }
 
-    /* ---- Read 1: range = Q0 + Q1 --------------------------------------- */
-    unsigned long q0_base = base;
-    unsigned long q2_base = base + 2UL * PAGES_PER_QUARTER * PAGE_SIZE;
-    unsigned long q4_base = base + 4UL * PAGES_PER_QUARTER * PAGE_SIZE; /* past end */
+    int n = read_dump(e, MAX_ENTRIES);
+    if (n < 0) { fprintf(stderr, "[tc02] dump failed: %s\n", strerror(-n)); stop_track(); free(e); return 1; }
 
-    set_range(q0_base, q2_base);
-    int n1 = read_dirty(e, MAX_ENTRIES);
-    int present1[NUM_QUARTERS], absent1[NUM_QUARTERS];
-    for (int q = 0; q < NUM_QUARTERS; q++)
-        tally_quarter(e, n1 >= 0 ? n1 : 0, base, q, &present1[q], &absent1[q]);
+    printf("[tc02] dump: %d total entries (expected %d)\n", n, TOTAL_PAGES);
 
-    printf("[tc02] read1 (range=Q0+Q1): total=%d\n", n1);
-    for (int q = 0; q < NUM_QUARTERS; q++)
-        printf("[tc02]   Q%d present=%d absent=%d (want present=%d absent=%d)\n",
-               q, present1[q], absent1[q],
-               q < 2 ? PAGES_PER_QUARTER : 0,
-               q < 2 ? 0 : PAGES_PER_QUARTER);
-
-    /* ---- Read 2: range = Q2 + Q3 (no table reset) ---------------------- */
-    set_range(q2_base, q4_base);
-    int n2 = read_dirty(e, MAX_ENTRIES);
-    int present2[NUM_QUARTERS], absent2[NUM_QUARTERS];
-    for (int q = 0; q < NUM_QUARTERS; q++)
-        tally_quarter(e, n2 >= 0 ? n2 : 0, base, q, &present2[q], &absent2[q]);
-
-    printf("[tc02] read2 (range=Q2+Q3): total=%d\n", n2);
-    for (int q = 0; q < NUM_QUARTERS; q++)
-        printf("[tc02]   Q%d present=%d absent=%d (want present=%d absent=%d)\n",
-               q, present2[q], absent2[q],
-               q >= 2 ? PAGES_PER_QUARTER : 0,
-               q >= 2 ? 0 : PAGES_PER_QUARTER);
+    int failed = 0;
+    for (int q = 0; q < NUM_QUARTERS; q++) {
+        int present = count_in_quarter(e, n, base, q);
+        printf("[tc02]   Q%d: %d/%d pages captured\n", q, present, PAGES_PER_QUARTER);
+        if (present != PAGES_PER_QUARTER) {
+            printf("[tc02]   FAIL Q%d: %d/%d pages missing\n",
+                   q, PAGES_PER_QUARTER - present, PAGES_PER_QUARTER);
+            failed = 1;
+        }
+    }
 
     stop_track();
     CUDA_CHECK(cudaFree(managed));
     free(e);
-
-    int failed = 0;
-
-    if (n1 < 0) {
-        printf("[tc02] FAIL: read1 table not active (n=%d)\n", n1);
-        failed = 1;
-    } else {
-        /* Q0 and Q1 must be fully present */
-        for (int q = 0; q < 2; q++)
-            if (present1[q] != PAGES_PER_QUARTER) {
-                printf("[tc02] FAIL: read1 Q%d - %d/%d pages missing\n",
-                       q, PAGES_PER_QUARTER - present1[q], PAGES_PER_QUARTER);
-                failed = 1;
-            }
-        /* Q2 and Q3 must be fully absent */
-        for (int q = 2; q < NUM_QUARTERS; q++)
-            if (present1[q] != 0) {
-                printf("[tc02] FAIL: read1 Q%d leaked through filter (%d pages)\n",
-                       q, present1[q]);
-                failed = 1;
-            }
-    }
-
-    if (n2 < 0) {
-        printf("[tc02] FAIL: read2 table not active (n=%d)\n", n2);
-        failed = 1;
-    } else {
-        /* Q0 and Q1 must be fully absent */
-        for (int q = 0; q < 2; q++)
-            if (present2[q] != 0) {
-                printf("[tc02] FAIL: read2 Q%d leaked through filter (%d pages)\n",
-                       q, present2[q]);
-                failed = 1;
-            }
-        /* Q2 and Q3 must be fully present (entries survived read1) */
-        for (int q = 2; q < NUM_QUARTERS; q++)
-            if (present2[q] != PAGES_PER_QUARTER) {
-                printf("[tc02] FAIL: read2 Q%d - %d/%d pages missing (consumed by read1?)\n",
-                       q, PAGES_PER_QUARTER - present2[q], PAGES_PER_QUARTER);
-                failed = 1;
-            }
-    }
 
     printf("[tc02] %s\n", failed ? "FAIL" : "PASS");
     return failed;

@@ -1,19 +1,20 @@
+#include <cuda_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START   "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP    "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_CUTOVER "/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
+#define PROCFS_DUMP    "/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 #define NUM_PAGES   8
 #define PAGE_SIZE   4096
 #define MAX_ENTRIES 4096
-#define NUM_CYCLES  6   
+#define NUM_CYCLES  6
 
 #define CUDA_CHECK(c) do {                                                  \
     cudaError_t _e = (c);                                                   \
@@ -26,70 +27,73 @@
 
 typedef struct { unsigned long addr, ts; } entry_t;
 
-__global__ void gpu_write_one_page(int *data, int page_idx) {
+__global__ void gpu_write_one_page(int *data, int page_idx)
+{
     int ipp = PAGE_SIZE / sizeof(int);
-    int base = page_idx * ipp;
     for (int i = 0; i < ipp; i++)
-        data[base + i] = page_idx * 1000 + i + 1;
+        data[page_idx * ipp + i] = page_idx * 1000 + i + 1;
 }
 
-static void procfs_write(const char *path, const char *val) {
+static int procfs_write_exact(const char *path, const char *val)
+{
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { 
-        perror(path); exit(1); 
-    }
-    write(fd, val, strlen(val));
+    if (fd < 0) return -errno;
+    ssize_t n = write(fd, val, strlen(val));
+    int saved = errno;
     close(fd);
+    if (n < 0) return -saved;
+    return 0;
 }
 
-static void start_track(void) {
+static int start_track_delta(void)
+{
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d delta", getpid());
+    return procfs_write_exact(PROCFS_START, buf);
+}
+
+static int stop_track(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
+    return procfs_write_exact(PROCFS_STOP, buf);
 }
 
-
-static void stop_track(void) {
+static int cutover(void)
+{
     char buf[16];
     snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
+    return procfs_write_exact(PROCFS_CUTOVER, buf);
 }
 
-
-static void set_range_full(void) {
-    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-}
-
-static int read_pages(entry_t *out, int max) {
-    FILE *f = fopen(PROCFS_PAGES, "r");
-    if (!f) return -1;
+static int read_dump(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_DUMP, "r");
+    if (!f) return -errno;
     int n = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { 
-                fclose(f); return -2; 
-            }
-            continue;
-        }
-        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2) n++;
+        if (line[0] == '#') continue;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+            n++;
     }
+    if (ferror(f)) { int saved = errno; fclose(f); return -saved; }
     fclose(f);
     return n;
 }
 
-static int page_tracked(entry_t *e, int n, unsigned long a) {
+static int page_tracked(entry_t *e, int n, unsigned long a)
+{
     unsigned long pa = a & ~(unsigned long)(PAGE_SIZE - 1);
-    for (int i = 0; i < n; i++) {
-        if (e[i].addr == pa) {
-            return 1;
-        }
-    }
+    for (int i = 0; i < n; i++)
+        if (e[i].addr == pa) return 1;
     return 0;
 }
 
-int main(void) {
-    printf("[tc04] multi_restart_stress (%d cycles, %d pages)\n", NUM_CYCLES, NUM_PAGES);
+int main(void)
+{
+    printf("[tc04] multi_reinit_stress (%d cycles, %d pages, delta mode)\n",
+           NUM_CYCLES, NUM_PAGES);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
     if (NUM_CYCLES > NUM_PAGES) { fprintf(stderr, "ERROR: NUM_CYCLES > NUM_PAGES\n"); return 1; }
@@ -99,26 +103,38 @@ int main(void) {
     memset(managed, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-
     int total_errors = 0;
 
     for (int cycle = 0; cycle < NUM_CYCLES; cycle++) {
         int cur_page  = cycle;
         int prev_page = cycle - 1;
 
-        start_track();
-        if (cycle > 0)
-            printf("[tc04] cycle %d: restart (new table)\n", cycle);
-        else
-            printf("[tc04] cycle %d: start (new table)\n", cycle);
+        int rc = start_track_delta();
+        if (rc) {
+            fprintf(stderr, "[tc04] cycle %d: start failed: %s\n", cycle, strerror(-rc));
+            total_errors++;
+            break;
+        }
 
         gpu_write_one_page<<<1, 1>>>(managed, cur_page);
         CUDA_CHECK(cudaDeviceSynchronize());
 
-        /* Query. */
+        rc = cutover();
+        if (rc) {
+            fprintf(stderr, "[tc04] cycle %d: cutover failed: %s\n", cycle, strerror(-rc));
+            stop_track();
+            total_errors++;
+            break;
+        }
+
         entry_t e[MAX_ENTRIES];
-        set_range_full();
-        int n = read_pages(e, MAX_ENTRIES);
+        int n = read_dump(e, MAX_ENTRIES);
+        if (n < 0) {
+            fprintf(stderr, "[tc04] cycle %d: dump failed: %s\n", cycle, strerror(-n));
+            stop_track();
+            total_errors++;
+            break;
+        }
 
         int cur_present  = page_tracked(e, n, (unsigned long)managed + cur_page  * PAGE_SIZE);
         int prev_present = (prev_page >= 0)
@@ -126,17 +142,22 @@ int main(void) {
                          : 0;
 
         int cycle_err = 0;
-        if (!cur_present) { printf("[tc04]   cycle %d: page[%d] missing (should be present)\n", cycle, cur_page); cycle_err++; }
-        if ( prev_present) { printf("[tc04]   cycle %d: page[%d] still present (should have been cleared by restart)\n", cycle, prev_page); cycle_err++; }
+        if (!cur_present)  { printf("[tc04]   cycle %d: page[%d] MISSING\n", cycle, cur_page);  cycle_err++; }
+        if ( prev_present) { printf("[tc04]   cycle %d: page[%d] LINGERED\n", cycle, prev_page); cycle_err++; }
 
-        printf("[tc04] cycle %d: page[%d]=%s page[%d]=%s  entries=%d  %s\n",
-               cycle,
-               cur_page,  cur_present  ? "present" : "MISSING",
-               prev_page, prev_present ? "LINGERING" : "absent",
+        printf("[tc04] cycle %d: page[%d]=%s page[%d]=%s entries=%d %s\n",
+               cycle, cur_page,  cur_present  ? "present" : "MISSING",
+                      prev_page, prev_present ? "LINGERING" : "absent",
                n, cycle_err ? "FAIL" : "ok");
 
         total_errors += cycle_err;
-        stop_track();
+
+        rc = stop_track();
+        if (rc) {
+            fprintf(stderr, "[tc04] cycle %d: stop failed: %s\n", cycle, strerror(-rc));
+            total_errors++;
+            break;
+        }
     }
 
     CUDA_CHECK(cudaFree(managed));

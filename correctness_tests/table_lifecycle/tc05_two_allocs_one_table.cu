@@ -1,41 +1,24 @@
 /*
  * tc05_two_allocs_one_table.cu
  *
- * Table lifecycle test 5: two independent managed allocations share
- * a single tracking table instance.
- *
- * A single start_track initializes one table. GPU writes to both
- * allocations must both appear in that table. The table's full
- * lifecycle (init, record from two separate VA ranges, query, destroy)
- * is exercised across two disjoint regions.
- *
- * Sequence:
- *   start_track         (one table)
- *   write alloc A       (faults from VA range A)
- *   write alloc B       (faults from VA range B)
- *   query               (both ranges must appear)
- *   stop_track
- *
- * PASS: all NUM_PAGES pages from alloc A and all NUM_PAGES pages from
- *       alloc B appear in dirty_pages under the single table.
- *
- * Build: nvcc -o tc05_two_allocs_one_table tc05_two_allocs_one_table.cu
- * Run:   sudo ./tc05_two_allocs_one_table
+ * Two independent managed allocations are written under a single delta tracking
+ * session. Both must appear in the same cutover+dump snapshot.
  */
 
+#include <cuda_runtime.h>
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include <fcntl.h>
-#include <cuda_runtime.h>
 
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_PAGES  "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE  "/proc/driver/nvidia-uvm/dirty_range"
+#define PROCFS_START   "/proc/driver/nvidia-uvm/dirty_tracking_start"
+#define PROCFS_STOP    "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+#define PROCFS_CUTOVER "/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
+#define PROCFS_DUMP    "/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
-#define NUM_PAGES   4   /* pages per allocation */
+#define NUM_PAGES   4
 #define PAGE_SIZE   4096
 #define NUM_INTS    (NUM_PAGES * PAGE_SIZE / sizeof(int))
 #define MAX_ENTRIES 4096
@@ -51,52 +34,54 @@
 
 typedef struct { unsigned long addr, ts; } entry_t;
 
-__global__ void gpu_write(int *data, int n)
-{
+__global__ void gpu_write(int *data, int n) {
     for (int i = 0; i < n; i++) data[i] = i + 1;
 }
 
-static void procfs_write(const char *path, const char *val)
+static int procfs_write_exact(const char *path, const char *val)
 {
     int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    write(fd, val, strlen(val));
+    if (fd < 0) return -errno;
+    ssize_t n = write(fd, val, strlen(val));
+    int saved = errno;
     close(fd);
+    if (n < 0) return -saved;
+    return 0;
 }
 
-static void start_track(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
-}
-
-
-static void stop_track(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
-}
-
-
-static void set_range_full(void) {
-    procfs_write(PROCFS_RANGE, "0x0 0xffffffffffffffff\n");
-}
-
-static int read_pages(entry_t *out, int max)
+static int start_track_delta(void)
 {
-    FILE *f = fopen(PROCFS_PAGES, "r");
-    if (!f) return -1;
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d delta", getpid());
+    return procfs_write_exact(PROCFS_START, buf);
+}
+
+static int stop_track(void)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    return procfs_write_exact(PROCFS_STOP, buf);
+}
+
+static int cutover(void)
+{
+    char buf[16];
+    snprintf(buf, sizeof(buf), "%d", getpid());
+    return procfs_write_exact(PROCFS_CUTOVER, buf);
+}
+
+static int read_dump(entry_t *out, int max)
+{
+    FILE *f = fopen(PROCFS_DUMP, "r");
+    if (!f) return -errno;
     int n = 0;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active")) { fclose(f); return -2; }
-            continue;
-        }
-        if (n < max &&
-            sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
+        if (line[0] == '#') continue;
+        if (n < max && sscanf(line, "0x%lx %lu", &out[n].addr, &out[n].ts) == 2)
             n++;
     }
+    if (ferror(f)) { int saved = errno; fclose(f); return -saved; }
     fclose(f);
     return n;
 }
@@ -119,7 +104,7 @@ static int count_missing(entry_t *e, int n, int *base, int npages)
 
 int main(void)
 {
-    printf("[tc05] two_allocs_one_table\n");
+    printf("[tc05] two_allocs_one_table (delta mode)\n");
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
@@ -130,49 +115,41 @@ int main(void)
     memset(alloc_b, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    printf("[tc05] alloc A: 0x%lx - 0x%lx\n",
-           (unsigned long)alloc_a,
-           (unsigned long)alloc_a + NUM_PAGES * PAGE_SIZE);
-    printf("[tc05] alloc B: 0x%lx - 0x%lx\n",
-           (unsigned long)alloc_b,
-           (unsigned long)alloc_b + NUM_PAGES * PAGE_SIZE);
+    printf("[tc05] alloc_a=0x%lx alloc_b=0x%lx pages=%d each\n",
+           (unsigned long)alloc_a, (unsigned long)alloc_b, NUM_PAGES);
 
-    pid_t pid = getpid();
+    int rc = start_track_delta();
+    if (rc) { fprintf(stderr, "[tc05] start failed: %s\n", strerror(-rc)); return 1; }
 
-    /* ---- single init ---- */
-    start_track();
-    printf("[tc05] single table initialized (pid=%d)\n", pid);
-
-    /* ---- write both allocations ---- */
     gpu_write<<<1, 1>>>(alloc_a, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("[tc05] wrote alloc A\n");
+    printf("[tc05] wrote alloc_a\n");
 
     gpu_write<<<1, 1>>>(alloc_b, NUM_INTS);
     CUDA_CHECK(cudaDeviceSynchronize());
-    printf("[tc05] wrote alloc B\n");
+    printf("[tc05] wrote alloc_b\n");
 
-    /* ---- query ---- */
+    rc = cutover();
+    if (rc) { fprintf(stderr, "[tc05] cutover failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+
     entry_t e[MAX_ENTRIES];
-    set_range_full();
-    int n = read_pages(e, MAX_ENTRIES);
+    int n = read_dump(e, MAX_ENTRIES);
+    if (n < 0) { fprintf(stderr, "[tc05] dump failed: %s\n", strerror(-n)); stop_track(); return 1; }
 
     int miss_a = count_missing(e, n, alloc_a, NUM_PAGES);
     int miss_b = count_missing(e, n, alloc_b, NUM_PAGES);
 
     printf("[tc05] total entries: %d\n", n);
-    printf("[tc05] alloc A: %d/%d pages present\n", NUM_PAGES - miss_a, NUM_PAGES);
-    printf("[tc05] alloc B: %d/%d pages present\n", NUM_PAGES - miss_b, NUM_PAGES);
+    printf("[tc05] alloc_a: %d/%d pages present\n", NUM_PAGES - miss_a, NUM_PAGES);
+    printf("[tc05] alloc_b: %d/%d pages present\n", NUM_PAGES - miss_b, NUM_PAGES);
 
-    /* ---- destroy ---- */
     stop_track();
     CUDA_CHECK(cudaFree(alloc_a));
     CUDA_CHECK(cudaFree(alloc_b));
 
     int failed = (n < 0 || miss_a > 0 || miss_b > 0);
     printf("[tc05] %s\n", failed ? "FAIL" : "PASS");
-    if (n < 0)     printf("[tc05]   procfs read failed (n=%d)\n", n);
-    if (miss_a > 0) printf("[tc05]   alloc A: %d pages missing\n", miss_a);
-    if (miss_b > 0) printf("[tc05]   alloc B: %d pages missing\n", miss_b);
+    if (miss_a > 0) printf("[tc05]   alloc_a: %d pages missing\n", miss_a);
+    if (miss_b > 0) printf("[tc05]   alloc_b: %d pages missing\n", miss_b);
     return failed;
 }
