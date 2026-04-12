@@ -1,4 +1,4 @@
-NVCC     = nvcc
+NVCC      = /usr/local/cuda/bin/nvcc
 NVCCFLAGS =
 
 TARGETS = test_dirty_tracking_suite

@@ -1,4 +1,4 @@
-NVCC      = nvcc
+NVCC      = /usr/local/cuda/bin/nvcc
 NVCCFLAGS =
 
 SRCS = $(wildcard tc*.cu)
