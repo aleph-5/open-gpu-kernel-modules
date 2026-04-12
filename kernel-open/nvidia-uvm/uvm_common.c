@@ -379,8 +379,18 @@ static int nv_procfs_read_dirty_tracking_query_dump(struct seq_file *s,
     up_read(&uvm_dirty_ds_rwsem);
     ds_read_locked = false;
 
-    uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
-    g_snapshot_pending = false;
+    // EDIT BY KUSHAGRA
+    /*
+        Only consume the snapshot when the output fit in the seq_file buffer.
+        If seq_has_overflowed(), seq_file will discard the output, grow the
+        buffer, and call this function again.  Leaving g_snapshot_pending true
+        and the snapshot intact lets that retry succeed.
+    */
+    if (!seq_has_overflowed(s)) {
+        uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
+        g_snapshot_pending = false;
+    }
+    // END OF EDIT
     goto out;
 
 out:
@@ -429,6 +439,11 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
     if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn) {
         return -EFAULT;
     }
+    // MODIFIED BY SANKALP
+    // if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn ||
+    //     !uvm_dirty_invalidate_fn) {
+    //     return -EFAULT;
+    // }
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
@@ -472,6 +487,19 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
     g_snapshot_pending = true;
     up_write(&uvm_dirty_ds_rwsem);
     ds_write_locked = false;
+
+    // MODIFIED BY SANKALP
+    // /* Revoke write PTEs so GPU writes in the new epoch re-fault and are
+    //  * recorded in the fresh table.  Must happen before barrier_end so the
+    //  * ISR lock is still held and no faults slip through between the DS swap
+    //  * and the PTE downgrade. */
+    // status = uvm_dirty_invalidate_fn();
+    // if (status != NV_OK) {
+    //     ret = -nv_status_to_errno(status);
+    //     uvm_dirty_query_barrier_end_fn();
+    //     query_barrier_held = false;
+    //     goto out;
+    // }
 
     uvm_dirty_query_barrier_end_fn();
     query_barrier_held = false;
