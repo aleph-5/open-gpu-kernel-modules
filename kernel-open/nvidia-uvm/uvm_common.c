@@ -436,14 +436,12 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
     bool ds_write_locked = false;
     int ret = 0;
 
-    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn) {
+    // EDIT BY SANKALP MITTAL
+    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn ||
+        !uvm_dirty_invalidate_fn) {
         return -EFAULT;
     }
-    // MODIFIED BY SANKALP
-    // if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn ||
-    //     !uvm_dirty_invalidate_fn) {
-    //     return -EFAULT;
-    // }
+    // END OF EDIT
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
@@ -488,21 +486,31 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
     up_write(&uvm_dirty_ds_rwsem);
     ds_write_locked = false;
 
-    // MODIFIED BY SANKALP
-    // /* Revoke write PTEs so GPU writes in the new epoch re-fault and are
-    //  * recorded in the fresh table.  Must happen before barrier_end so the
-    //  * ISR lock is still held and no faults slip through between the DS swap
-    //  * and the PTE downgrade. */
-    // status = uvm_dirty_invalidate_fn();
-    // if (status != NV_OK) {
-    //     ret = -nv_status_to_errno(status);
-    //     uvm_dirty_query_barrier_end_fn();
-    //     query_barrier_held = false;
-    //     goto out;
-    // }
-
     uvm_dirty_query_barrier_end_fn();
     query_barrier_held = false;
+
+    // EDIT BY SANKALP MITTAL
+    /* Revoke write PTEs so GPU writes in the new epoch re-fault and are
+     * recorded in the fresh table.  Must happen after barrier_end because
+     * uvm_dirty_invalidate_fn (uvm_dirty_downgrade_all_permissions) calls
+     * uvm_dirty_barrier_begin which re-acquires g_uvm_global.va_spaces.lock
+     * and va_space->read_acquire_write_release_lock -- both of which are
+     * already held by the query barrier on this same thread.  Calling it
+     * before barrier_end causes a self-deadlock.
+     *
+     * On SUCCESS uvm_dirty_downgrade_all_permissions leaves
+     * g_uvm_global.va_spaces.lock and va_space write lock held (via
+     * g_uvm_dirty_start_barrier_ctx); uvm_dirty_barrier_end_fn() releases
+     * them.  On failure the function cleans up its own locks internally, so
+     * uvm_dirty_barrier_end_fn() is called unconditionally and is a no-op
+     * in the failure case (begin_done will be false). */
+    status = uvm_dirty_invalidate_fn();
+    uvm_dirty_barrier_end_fn();
+    if (status != NV_OK) {
+        ret = -nv_status_to_errno(status);
+        goto out;
+    }
+    // END OF EDIT
 
     if (old_snapshot.priv != NULL) {
         uvm_dirty_ds_destroy(&old_snapshot);
