@@ -74,22 +74,25 @@ def discover_suites():
     return ordered
 
 
-def run_suite(suite_name, runner_path, no_build=False, verbose=False, timeout=600):
+def run_suite(suite_name, runner_path, no_build=False, clean=False, verbose=False, timeout=600):
     """
     Invoke run_tests.py for a single suite as a subprocess.
     Returns (passed, failed, elapsed).
     """
-    cmd = [sys.executable, runner_path, "--timeout", "300"]
-    if no_build:
-        cmd.append("--no-build")
-    if verbose:
-        cmd.append("--verbose")
-    if os.geteuid() != 0:
-        cmd = ["sudo", sys.executable, runner_path, "--timeout", "300"]
+    def build_cmd(exe):
+        cmd = [exe, runner_path, "--timeout", "300"]
         if no_build:
             cmd.append("--no-build")
+        if not clean:
+            cmd.append("--no-clean")
         if verbose:
             cmd.append("--verbose")
+        return cmd
+
+    if os.geteuid() != 0:
+        cmd = ["sudo"] + build_cmd(sys.executable)
+    else:
+        cmd = build_cmd(sys.executable)
 
     t0 = time.monotonic()
     try:
@@ -126,6 +129,8 @@ def main():
     )
     parser.add_argument("--no-build", action="store_true",
                         help="pass --no-build to every suite runner")
+    parser.add_argument("-c", "--clean", action="store_true",
+                        help="run make clean after each suite (default: keep build artifacts)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="pass --verbose to every suite runner")
     parser.add_argument("--list", action="store_true",
@@ -174,6 +179,7 @@ def main():
         rc, elapsed = run_suite(
             suite_name, runner_path,
             no_build=args.no_build,
+            clean=args.clean,
             verbose=args.verbose,
             timeout=args.timeout,
         )

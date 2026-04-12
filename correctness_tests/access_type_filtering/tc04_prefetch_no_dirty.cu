@@ -140,8 +140,9 @@ int main(void)
     if (rc) { fprintf(stderr, "[tc04] start failed: %s\n", strerror(-rc)); return 1; }
 
     // Prefetch to GPU — migration, NOT a write fault
+    // CUDA 13.0 signature: (ptr, size, cudaMemLocation, flags, stream)
     cudaMemLocation loc = {cudaMemLocationTypeDevice, device};
-    CUDA_CHECK(cudaMemPrefetchAsync(managed, NUM_PAGES * PAGE_SIZE, loc, 0));
+    CUDA_CHECK(cudaMemPrefetchAsync(managed, NUM_PAGES * PAGE_SIZE, loc, 0, 0));
 
     /* Read-only kernel. */
     gpu_read_all<<<1, 1>>>(managed, NUM_PAGES, sink);

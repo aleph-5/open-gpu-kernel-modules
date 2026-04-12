@@ -92,6 +92,7 @@ def run_suite_main():
         help="test name prefixes to run (e.g. tc01 tc03); default: all",
     )
     parser.add_argument("--no-build", action="store_true", help="skip make step")
+    parser.add_argument("--no-clean", action="store_true", help="skip make clean after tests")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="always print test output even on PASS")
     parser.add_argument("--timeout", type=int, default=300,
@@ -155,5 +156,6 @@ def run_suite_main():
                 marker = "TIMEOUT" if rc == -1 else "FAIL"
                 print(f"    [{marker}]  {name}")
 
-    subprocess.run(["make", "-C", suite_dir, "clean"], capture_output=False)
+    if not args.no_clean:
+        subprocess.run(["make", "-C", suite_dir, "clean"], capture_output=False)
     sys.exit(0 if failed == 0 else 1)
