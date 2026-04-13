@@ -223,7 +223,7 @@ static NV_STATUS uvm_dirty_new_snapshot(struct uvm_dirty_ds* dest) {
         return NV_ERR_GENERIC;
     }
 
-    new_live.stats.enabled = g_dirty_ds.stats.enabled;
+    new_live.stats = g_dirty_ds.stats; // EDIT BY SANKALP MITTAL
 
 
     if (uvm_dirty_ds_init(&new_live) != NV_OK) {
@@ -436,12 +436,9 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
     bool ds_write_locked = false;
     int ret = 0;
 
-    // EDIT BY SANKALP MITTAL
-    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn ||
-        !uvm_dirty_invalidate_fn) {
+    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn) {
         return -EFAULT;
     }
-    // END OF EDIT
 
     mutex_lock(&uvm_dirty_lifecycle_lock);
 
@@ -488,29 +485,6 @@ static ssize_t dirty_tracking_query_cutover(struct file* file,
 
     uvm_dirty_query_barrier_end_fn();
     query_barrier_held = false;
-
-    // EDIT BY SANKALP MITTAL
-    /* Revoke write PTEs so GPU writes in the new epoch re-fault and are
-     * recorded in the fresh table.  Must happen after barrier_end because
-     * uvm_dirty_invalidate_fn (uvm_dirty_downgrade_all_permissions) calls
-     * uvm_dirty_barrier_begin which re-acquires g_uvm_global.va_spaces.lock
-     * and va_space->read_acquire_write_release_lock -- both of which are
-     * already held by the query barrier on this same thread.  Calling it
-     * before barrier_end causes a self-deadlock.
-     *
-     * On SUCCESS uvm_dirty_downgrade_all_permissions leaves
-     * g_uvm_global.va_spaces.lock and va_space write lock held (via
-     * g_uvm_dirty_start_barrier_ctx); uvm_dirty_barrier_end_fn() releases
-     * them.  On failure the function cleans up its own locks internally, so
-     * uvm_dirty_barrier_end_fn() is called unconditionally and is a no-op
-     * in the failure case (begin_done will be false). */
-    status = uvm_dirty_invalidate_fn();
-    uvm_dirty_barrier_end_fn();
-    if (status != NV_OK) {
-        ret = -nv_status_to_errno(status);
-        goto out;
-    }
-    // END OF EDIT
 
     if (old_snapshot.priv != NULL) {
         uvm_dirty_ds_destroy(&old_snapshot);
@@ -694,10 +668,20 @@ static ssize_t dirty_tracking_start(struct file* file,
 
     pid_t target_pid = 0;
     char querying_state_str[16];
-    if (sscanf(kbuf, "%d %15s", &target_pid, querying_state_str) != 2 || target_pid <= 0) {
+    // EDIT BY SANKALP MITTAL
+    int consumed = 0;
+    if (sscanf(kbuf, "%d %15s%n", &target_pid, querying_state_str, &consumed) != 2 || target_pid <= 0) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -EINVAL;
     }
+    /* Reject trailing garbage after the mode keyword. */
+    for (int i = consumed; kbuf[i] != '\0'; i++) {
+        if (kbuf[i] != ' ' && kbuf[i] != '\t' && kbuf[i] != '\n' && kbuf[i] != '\r') {
+            mutex_unlock(&uvm_dirty_lifecycle_lock);
+            return -EINVAL;
+        }
+    }
+    // END OF EDIT
 
     if (uvm_dirty_tracking_started()) {
         mutex_unlock(&uvm_dirty_lifecycle_lock);
