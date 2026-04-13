@@ -1,21 +1,18 @@
 /*
  * tc03_concurrent_start_two_processes.cu
  *
- * Two processes (parent and child via fork) each independently start their
- * own tracking session and write distinct pages. Each process reads its own
- * dump. The tracking is per-pid, so each process must see only its own pages
- * and the sessions must not interfere.
+ * Only one process may hold a dirty tracking session at a time. If a second
+ * process attempts to start tracking while a session is already active, the
+ * start must be rejected with an error (EBUSY).
  *
  * Flow:
- *   parent allocates two non-overlapping managed arrays (one for parent, one for child)
+ *   parent: start(delta)  — succeeds, owns the session
  *   fork()
- *   parent: start(delta) → write parent_pages → cutover → dump → verify parent pages only
- *   child:  start(delta) → write child_pages  → cutover → dump → verify child pages only
- *   parent waits for child; both PASS → overall PASS
- *
- * Note: each process runs cudaInit implicitly. The child inherits the CUDA
- * context initialization but the managed allocations are shared memory; each
- * process writes to its own allocation range.
+ *   child:  start(delta)  — must be rejected (session already held by parent)
+ *   child exits PASS if start was rejected, FAIL if it succeeded
+ *   parent: write pages → cutover → dump → verify NUM_PAGES present → stop
+ *   parent waits for child; overall PASS requires parent dump correct AND
+ *   child was rejected.
  */
 
 #include <cuda_runtime.h>
@@ -116,74 +113,78 @@ static int count_in_range(entry_t *e, int n, unsigned long base, int num_pages)
 
 int main(void)
 {
-    printf("[tc03] concurrent_start_two_processes\n");
+    printf("[tc03] concurrent_start_two_processes (second start must be rejected)\n");
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
-    /* Allocate two regions before fork so both processes can reference them. */
-    int *parent_mem = NULL, *child_mem = NULL;
+    int *parent_mem = NULL;
     CUDA_CHECK(cudaMallocManaged(&parent_mem, NUM_PAGES * PAGE_SIZE));
-    CUDA_CHECK(cudaMallocManaged(&child_mem,  NUM_PAGES * PAGE_SIZE));
     memset(parent_mem, 0, NUM_PAGES * PAGE_SIZE);
-    memset(child_mem,  0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     unsigned long parent_base = (unsigned long)parent_mem;
-    unsigned long child_base  = (unsigned long)child_mem;
-    printf("[tc03] parent_base=0x%lx child_base=0x%lx\n", parent_base, child_base);
+    printf("[tc03] pid=%d parent_base=0x%lx\n", getpid(), parent_base);
+
+    /* Parent claims the session before forking. */
+    int rc = start_track_delta();
+    if (rc) {
+        fprintf(stderr, "[tc03/parent] start failed: %s\n", strerror(-rc));
+        CUDA_CHECK(cudaFree(parent_mem));
+        return 1;
+    }
+    printf("[tc03/parent] tracking started\n");
 
     pid_t child_pid = fork();
     if (child_pid < 0) {
         perror("fork");
+        stop_track();
         CUDA_CHECK(cudaFree(parent_mem));
-        CUDA_CHECK(cudaFree(child_mem));
         return 1;
     }
 
     if (child_pid == 0) {
-        /* Child process. */
-        int rc = start_track_delta();
-        if (rc) { fprintf(stderr, "[tc03/child] start failed: %s\n", strerror(-rc)); exit(1); }
+        /* Child: session is already held by parent — start must be rejected. */
+        int child_rc = start_track_delta();
+        printf("[tc03/child] start returned %d (%s) (want error)\n",
+               child_rc, child_rc ? strerror(-child_rc) : "success");
 
-        gpu_write_range<<<1, 32>>>(child_mem, NUM_PAGES, 200);
-        cudaDeviceSynchronize();
-
-        rc = cutover();
-        if (rc) { fprintf(stderr, "[tc03/child] cutover failed: %s\n", strerror(-rc)); stop_track(); exit(1); }
-
-        entry_t e[MAX_ENTRIES];
-        int n = read_dump(e, MAX_ENTRIES);
-        if (n < 0) { fprintf(stderr, "[tc03/child] dump failed: %s\n", strerror(-n)); stop_track(); exit(1); }
-
-        int child_found  = count_in_range(e, n, child_base,  NUM_PAGES);
-        int parent_found = count_in_range(e, n, parent_base, NUM_PAGES);
-        printf("[tc03/child] dump: n=%d child_pages=%d/%d parent_pages=%d (want %d,0)\n",
-               n, child_found, NUM_PAGES, parent_found, NUM_PAGES);
-
-        stop_track();
-        int fail = (child_found != NUM_PAGES || parent_found != 0);
-        printf("[tc03/child] %s\n", fail ? "FAIL" : "PASS");
+        int fail = (child_rc == 0); /* success means the lock wasn't enforced */
+        if (fail)  {
+            printf("[tc03/child] FAIL — second start was accepted (must be exclusive)\n");
+            /* Clean up the session we shouldn't have gotten. */
+            stop_track();
+        } else {
+            printf("[tc03/child] PASS — second start correctly rejected\n");
+        }
         exit(fail);
     }
 
-    /* Parent process. */
-    int rc = start_track_delta();
-    if (rc) { fprintf(stderr, "[tc03/parent] start failed: %s\n", strerror(-rc)); waitpid(child_pid, NULL, 0); return 1; }
-
+    /* Parent: proceed with its session normally. */
     gpu_write_range<<<1, 32>>>(parent_mem, NUM_PAGES, 100);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     rc = cutover();
-    if (rc) { fprintf(stderr, "[tc03/parent] cutover failed: %s\n", strerror(-rc)); stop_track(); waitpid(child_pid, NULL, 0); return 1; }
+    if (rc) {
+        fprintf(stderr, "[tc03/parent] cutover failed: %s\n", strerror(-rc));
+        stop_track();
+        waitpid(child_pid, NULL, 0);
+        CUDA_CHECK(cudaFree(parent_mem));
+        return 1;
+    }
 
     entry_t e[MAX_ENTRIES];
     int n = read_dump(e, MAX_ENTRIES);
-    if (n < 0) { fprintf(stderr, "[tc03/parent] dump failed: %s\n", strerror(-n)); stop_track(); waitpid(child_pid, NULL, 0); return 1; }
+    if (n < 0) {
+        fprintf(stderr, "[tc03/parent] dump failed: %s\n", strerror(-n));
+        stop_track();
+        waitpid(child_pid, NULL, 0);
+        CUDA_CHECK(cudaFree(parent_mem));
+        return 1;
+    }
 
     int parent_found = count_in_range(e, n, parent_base, NUM_PAGES);
-    int child_found  = count_in_range(e, n, child_base,  NUM_PAGES);
-    printf("[tc03/parent] dump: n=%d parent_pages=%d/%d child_pages=%d (want %d,0)\n",
-           n, parent_found, NUM_PAGES, child_found, NUM_PAGES);
+    printf("[tc03/parent] dump: n=%d parent_pages=%d/%d (want %d)\n",
+           n, parent_found, NUM_PAGES, NUM_PAGES);
 
     stop_track();
 
@@ -192,12 +193,13 @@ int main(void)
     int child_exit = WIFEXITED(child_status) ? WEXITSTATUS(child_status) : 1;
 
     CUDA_CHECK(cudaFree(parent_mem));
-    CUDA_CHECK(cudaFree(child_mem));
 
-    int parent_fail = (parent_found != NUM_PAGES || child_found != 0);
+    int parent_fail = (parent_found != NUM_PAGES);
     int failed = parent_fail || child_exit;
     printf("[tc03] parent %s, child %s\n",
            parent_fail ? "FAIL" : "PASS", child_exit ? "FAIL" : "PASS");
     printf("[tc03] %s\n", failed ? "FAIL" : "PASS");
+    if (parent_fail) printf("[tc03]   parent dump: got %d want %d\n", parent_found, NUM_PAGES);
+    if (child_exit)  printf("[tc03]   child: second start was not rejected\n");
     return failed;
 }

@@ -1,14 +1,21 @@
 /*
- * tc03_redirty_after_cutover.cu
+ * tc02_empty_epoch_no_carryover.cu
  *
- * Write P → cutover → dump1 (records ts1).
- * Write P again → cutover → dump2.
- * Cutover does NOT re-invalidate PTEs, so the second write to P does not
- * trigger a fault and must NOT appear in dump2.
+ * Delta epochs must start clean: if no writes occur between two cutovers,
+ * the second dump must be empty.
+ *
+ * Flow (delta mode):
+ *   write P → cutover → dump1: P present
+ *   (no write) → cutover → dump2: empty
+ *
+ * This confirms that delta snapshots do not carry pages forward from the
+ * prior epoch. Distinct from tc01 (which tests that post-cutover writes to
+ * new pages are excluded from the prior snapshot) and from ordering/tc05
+ * (which uses stop/start between epochs rather than consecutive cutovers).
  *
  * PASS conditions:
  *   dump1: P present, ts1 > 0
- *   dump2: P absent (p2_count == 0)
+ *   dump2: empty (n2 == 0)
  */
 
 #include <cuda_runtime.h>
@@ -94,7 +101,7 @@ static int read_dump(entry_t *out, int max)
 
 int main(void)
 {
-    printf("[tc03] redirty_after_cutover (delta mode, two epochs)\n");
+    printf("[tc02] empty_epoch_no_carryover (delta mode)\n");
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
@@ -104,51 +111,42 @@ int main(void)
     CUDA_CHECK(cudaDeviceSynchronize());
 
     unsigned long pa_P = (unsigned long)managed;
-    printf("[tc03] pid=%d P=0x%lx\n", getpid(), pa_P);
+    printf("[tc02] pid=%d P=0x%lx\n", getpid(), pa_P);
 
     int rc = start_track_delta();
-    if (rc) { fprintf(stderr, "[tc03] start failed: %s\n", strerror(-rc)); return 1; }
+    if (rc) { fprintf(stderr, "[tc02] start failed: %s\n", strerror(-rc)); return 1; }
 
     /* Epoch 1: write P. */
     gpu_write_page<<<1, 1>>>(managed, 1);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     rc = cutover();
-    if (rc) { fprintf(stderr, "[tc03] cutover1 failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+    if (rc) { fprintf(stderr, "[tc02] cutover1 failed: %s\n", strerror(-rc)); stop_track(); return 1; }
 
     entry_t snap1[MAX_ENTRIES];
     int n1 = read_dump(snap1, MAX_ENTRIES);
-    if (n1 < 0) { fprintf(stderr, "[tc03] dump1 failed: %s\n", strerror(-n1)); stop_track(); return 1; }
+    if (n1 < 0) { fprintf(stderr, "[tc02] dump1 failed: %s\n", strerror(-n1)); stop_track(); return 1; }
 
     unsigned long ts1 = 0;
     for (int i = 0; i < n1; i++)
         if (snap1[i].addr == pa_P) { ts1 = snap1[i].ts; break; }
-    printf("[tc03] epoch1: n=%d, P ts1=%lu\n", n1, ts1);
+    printf("[tc02] epoch1: n=%d, P ts1=%lu\n", n1, ts1);
 
-    /* Epoch 2: write P again. Cutover does not re-invalidate PTEs, so P will
-     * not re-fault and must not appear in dump2. */
-    gpu_write_page<<<1, 1>>>(managed, 2);
-    CUDA_CHECK(cudaDeviceSynchronize());
-
+    /* Epoch 2: no write. The delta snapshot must be empty. */
     rc = cutover();
-    if (rc) { fprintf(stderr, "[tc03] cutover2 failed: %s\n", strerror(-rc)); stop_track(); return 1; }
+    if (rc) { fprintf(stderr, "[tc02] cutover2 failed: %s\n", strerror(-rc)); stop_track(); return 1; }
 
     entry_t snap2[MAX_ENTRIES];
     int n2 = read_dump(snap2, MAX_ENTRIES);
-    if (n2 < 0) { fprintf(stderr, "[tc03] dump2 failed: %s\n", strerror(-n2)); stop_track(); return 1; }
-
-    int p2_count = 0;
-    for (int i = 0; i < n2; i++) {
-        if (snap2[i].addr == pa_P) p2_count++;
-    }
-    printf("[tc03] epoch2: n=%d, P count=%d (want count=0)\n", n2, p2_count);
+    if (n2 < 0) { fprintf(stderr, "[tc02] dump2 failed: %s\n", strerror(-n2)); stop_track(); return 1; }
+    printf("[tc02] epoch2: n=%d (want 0)\n", n2);
 
     stop_track();
     CUDA_CHECK(cudaFree(managed));
 
-    int failed = (ts1 == 0 || p2_count != 0);
-    printf("[tc03] %s\n", failed ? "FAIL" : "PASS");
-    if (ts1 == 0)      printf("[tc03]   P not recorded in epoch 1\n");
-    if (p2_count > 0)  printf("[tc03]   P appears %d time(s) in epoch 2 (expected 0, no re-invalidation)\n", p2_count);
+    int failed = (ts1 == 0 || n2 != 0);
+    printf("[tc02] %s\n", failed ? "FAIL" : "PASS");
+    if (ts1 == 0) printf("[tc02]   P not recorded in epoch 1\n");
+    if (n2 != 0)  printf("[tc02]   epoch 2 dump not empty: %d entries (carryover from epoch 1)\n", n2);
     return failed;
 }

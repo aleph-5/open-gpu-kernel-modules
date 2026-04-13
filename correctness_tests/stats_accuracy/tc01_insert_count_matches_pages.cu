@@ -99,8 +99,9 @@ static int read_dump(entry_t *out, int max)
     return n;
 }
 
-/* Read the stats file and search for a counter by keyword substring.
- * Returns the value, or -1 if not found. */
+/* Read the stats file and return the "count" field for a keyword.
+ * Handles the structured format: "keyword:  count=N  avg_ns=N ..."
+ * Returns N on success, or -1 if the keyword or count field is not found. */
 static long long read_stat(const char *keyword)
 {
     FILE *f = fopen(PROCFS_STATS, "r");
@@ -108,9 +109,11 @@ static long long read_stat(const char *keyword)
     char line[256];
     long long val = -1;
     while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, keyword)) {
-            char *colon = strchr(line, ':');
-            if (colon) { val = atoll(colon + 1); break; }
+        if (!strstr(line, keyword)) continue;
+        char *count_ptr = strstr(line, "count=");
+        if (count_ptr) {
+            val = atoll(count_ptr + 6); /* skip "count=" */
+            break;
         }
     }
     fclose(f);
@@ -150,10 +153,8 @@ int main(void)
     if (n < 0) { fprintf(stderr, "[tc01] dump failed: %s\n", strerror(-n)); stop_track(); return 1; }
     printf("[tc01] dump: %d entries (want %d)\n", n, NUM_PAGES);
 
-    /* Read stats — search for various plausible counter names. */
+    // Read stats
     long long insert_count = read_stat("insert");
-    if (insert_count < 0) insert_count = read_stat("record");
-    if (insert_count < 0) insert_count = read_stat("dirty_page");
     printf("[tc01] stats insert_count=%lld (want %d; -1=not found)\n", insert_count, NUM_PAGES);
 
     /* Disable stats. */

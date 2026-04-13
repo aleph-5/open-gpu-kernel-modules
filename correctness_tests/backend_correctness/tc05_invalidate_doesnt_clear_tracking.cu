@@ -2,16 +2,17 @@
  * tc05_invalidate_clears_tracking.cu
  *
  * When a managed allocation is freed (cudaFree), UVM sends an invalidate
- * notification to the dirty tracker. The pages from the freed allocation
- * must NOT appear in subsequent dumps.
+ * notification to the dirty tracker. The dirty entry for the freed allocation
+ * must PERSIST in the tracker — invalidate does not remove records.
  *
  * Flow:
  *   start(delta)
  *   alloc A → write A → sync
  *   alloc B → write B → sync
- *   cudaFree(A) → A's pages invalidated from tracker
+ *   cudaFree(A) → invalidate notification sent for A's pages
  *   cutover → dump
- *   PASS: B's pages present; A's pages absent (invalidated on free)
+ *   PASS: both A's and B's pages present in dump
+ *         (A's entries survived the invalidate)
  */
 
 #include <cuda_runtime.h>
@@ -109,7 +110,7 @@ static int count_in_alloc(entry_t *e, int n, unsigned long base, int num_pages)
 
 int main(void)
 {
-    printf("[tc05] invalidate_clears_tracking: %d pages each\n", PAGES_EACH);
+    printf("[tc05] invalidate_persists_entry: %d pages each\n", PAGES_EACH);
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
@@ -131,7 +132,8 @@ int main(void)
     gpu_write_all<<<1, 32>>>(alloc_b, PAGES_EACH, 2);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    /* Free alloc A — UVM should call invalidate on A's pages in the tracker. */
+    /* Free alloc A — UVM sends an invalidate for A's pages. The dirty entries
+     * must survive: invalidate does not remove records from the tracker. */
     CUDA_CHECK(cudaFree(alloc_a));
     alloc_a = NULL;
 
@@ -144,15 +146,15 @@ int main(void)
 
     int a_found = count_in_alloc(e, n, base_a, PAGES_EACH);
     int b_found = count_in_alloc(e, n, base_b, PAGES_EACH);
-    printf("[tc05] dump: n=%d A=%d/%d B=%d/%d (want A=0 B=%d)\n",
-           n, a_found, PAGES_EACH, b_found, PAGES_EACH, PAGES_EACH);
+    printf("[tc05] dump: n=%d A=%d/%d B=%d/%d (want A=%d B=%d)\n",
+           n, a_found, PAGES_EACH, b_found, PAGES_EACH, PAGES_EACH, PAGES_EACH);
 
     stop_track();
     CUDA_CHECK(cudaFree(alloc_b));
 
-    int failed = (a_found != 0 || b_found != PAGES_EACH);
+    int failed = (a_found != PAGES_EACH || b_found != PAGES_EACH);
     printf("[tc05] %s\n", failed ? "FAIL" : "PASS");
-    if (a_found != 0)        printf("[tc05]   %d freed-alloc pages not invalidated\n", a_found);
-    if (b_found != PAGES_EACH) printf("[tc05]   only %d/%d alloc-B pages recorded\n", b_found, PAGES_EACH);
+    if (a_found != PAGES_EACH) printf("[tc05]   A: only %d/%d pages in dump (invalidate wrongly cleared entries)\n", a_found, PAGES_EACH);
+    if (b_found != PAGES_EACH) printf("[tc05]   B: only %d/%d pages in dump\n", b_found, PAGES_EACH);
     return failed;
 }

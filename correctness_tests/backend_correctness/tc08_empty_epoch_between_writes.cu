@@ -4,11 +4,14 @@
  * An epoch with no writes must produce an empty dump (0 entries). Intercalate
  * empty epochs between write epochs and verify isolation is maintained.
  *
+ * Cutover does not re-invalidate PTEs, so epoch 3 must use a fresh allocation
+ * whose pages have never been mapped — guaranteeing genuine faults.
+ *
  * Flow (delta mode):
  *   start(delta)
- *   epoch 1: write pages → cutover → dump1 (N entries)
- *   epoch 2: no writes  → cutover → dump2 (0 entries)
- *   epoch 3: write pages → cutover → dump3 (N entries)
+ *   epoch 1: write alloc1 pages → cutover → dump1 (N entries)
+ *   epoch 2: no writes          → cutover → dump2 (0 entries)
+ *   epoch 3: write alloc2 pages → cutover → dump3 (N entries)
  *   PASS: dump1=N, dump2=0, dump3=N
  *
  * Also verifies that pages from epoch 1 don't bleed into epoch 2's empty dump.
@@ -103,18 +106,18 @@ int main(void)
 
     if (geteuid() != 0) { fprintf(stderr, "ERROR: must run as root\n"); return 1; }
 
-    int *managed = NULL;
-    CUDA_CHECK(cudaMallocManaged(&managed, NUM_PAGES * PAGE_SIZE));
-    memset(managed, 0, NUM_PAGES * PAGE_SIZE);
+    int *managed1 = NULL, *managed2 = NULL;
+    CUDA_CHECK(cudaMallocManaged(&managed1, NUM_PAGES * PAGE_SIZE));
+    memset(managed1, 0, NUM_PAGES * PAGE_SIZE);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    printf("[tc08] pid=%d alloc=0x%lx\n", getpid(), (unsigned long)managed);
+    printf("[tc08] pid=%d alloc1=0x%lx\n", getpid(), (unsigned long)managed1);
 
     int rc = start_track_delta();
     if (rc) { fprintf(stderr, "[tc08] start failed: %s\n", strerror(-rc)); return 1; }
 
-    /* Epoch 1: write. */
-    gpu_write_range<<<1, 32>>>(managed, NUM_PAGES, 1);
+    /* Epoch 1: write alloc1. */
+    gpu_write_range<<<1, 32>>>(managed1, NUM_PAGES, 1);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     rc = cutover();
@@ -123,7 +126,7 @@ int main(void)
     entry_t snap1[MAX_ENTRIES];
     int n1 = read_dump(snap1, MAX_ENTRIES);
     if (n1 < 0) { fprintf(stderr, "[tc08] dump1 failed: %s\n", strerror(-n1)); stop_track(); return 1; }
-    printf("[tc08] epoch1 (write): n=%d (want %d)\n", n1, NUM_PAGES);
+    printf("[tc08] epoch1 (write alloc1): n=%d (want %d)\n", n1, NUM_PAGES);
 
     /* Epoch 2: no writes. */
     rc = cutover();
@@ -134,8 +137,13 @@ int main(void)
     if (n2 < 0) { fprintf(stderr, "[tc08] dump2 failed: %s\n", strerror(-n2)); stop_track(); return 1; }
     printf("[tc08] epoch2 (no-write): n=%d (want 0)\n", n2);
 
-    /* Epoch 3: write same pages again (PTEs re-downgraded by prior cutover). */
-    gpu_write_range<<<1, 32>>>(managed, NUM_PAGES, 3);
+    /* Epoch 3: write a fresh allocation whose pages have never been mapped.
+     * Cutover does not re-invalidate PTEs, so we cannot reuse alloc1 — a fresh
+     * alloc guarantees genuine faults. */
+    CUDA_CHECK(cudaMallocManaged(&managed2, NUM_PAGES * PAGE_SIZE));
+    printf("[tc08] alloc2=0x%lx\n", (unsigned long)managed2);
+
+    gpu_write_range<<<1, 32>>>(managed2, NUM_PAGES, 3);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     rc = cutover();
@@ -144,10 +152,11 @@ int main(void)
     entry_t snap3[MAX_ENTRIES];
     int n3 = read_dump(snap3, MAX_ENTRIES);
     if (n3 < 0) { fprintf(stderr, "[tc08] dump3 failed: %s\n", strerror(-n3)); stop_track(); return 1; }
-    printf("[tc08] epoch3 (write): n=%d (want %d)\n", n3, NUM_PAGES);
+    printf("[tc08] epoch3 (write alloc2): n=%d (want %d)\n", n3, NUM_PAGES);
 
     stop_track();
-    CUDA_CHECK(cudaFree(managed));
+    CUDA_CHECK(cudaFree(managed1));
+    CUDA_CHECK(cudaFree(managed2));
 
     int failed = (n1 != NUM_PAGES || n2 != 0 || n3 != NUM_PAGES);
     printf("[tc08] %s\n", failed ? "FAIL" : "PASS");
