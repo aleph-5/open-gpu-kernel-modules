@@ -1,22 +1,21 @@
+#include <cuda_runtime.h>
+#include <fcntl.h>
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <math.h>
-#include <time.h>
 #include <sys/stat.h>
-#include <cuda_runtime.h>
+#include <time.h>
+#include <unistd.h>
+
+#include "../common/dirty_tracking_procfs.h"
 
 #define PAGE_SIZE 4096
 
-static const int PAGE_COUNTS[]  = { 8, 64, 256, 512, 1024 };
-static const int ITER_COUNTS[]  = { 10, 50, 200 };
-#define N_PAGE_COUNTS  ((int)(sizeof(PAGE_COUNTS) / sizeof(PAGE_COUNTS[0])))
-#define N_ITER_COUNTS  ((int)(sizeof(ITER_COUNTS)  / sizeof(ITER_COUNTS[0])))
-
-#define PROCFS_START  "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP   "/proc/driver/nvidia-uvm/dirty_tracking_stop"
+static const int PAGE_COUNTS[] = {8, 64, 256, 512, 1024};
+static const int ITER_COUNTS[] = {10, 50, 200};
+#define N_PAGE_COUNTS ((int)(sizeof(PAGE_COUNTS) / sizeof(PAGE_COUNTS[0])))
+#define N_ITER_COUNTS ((int)(sizeof(ITER_COUNTS) / sizeof(ITER_COUNTS[0])))
 
 #define CUDA_CHECK(call) do {                                              \
     cudaError_t _e = (call);                                               \
@@ -30,33 +29,40 @@ static const int ITER_COUNTS[]  = { 10, 50, 200 };
 __global__ void kernel_read(const int *data, int n, volatile int *sink)
 {
     int acc = 0;
-    for (int i = 0; i < n; i++) acc += data[i];
+    for (int i = 0; i < n; i++)
+        acc += data[i];
     *sink = acc;
 }
 
 __global__ void kernel_write(int *data, int n)
 {
-    for (int i = 0; i < n; i++) data[i] = i + 1;
+    for (int i = 0; i < n; i++)
+        data[i] = i + 1;
 }
 
 __global__ void kernel_mixed(int *data, int n, volatile int *sink)
 {
     int acc = 0;
-    for (int i = 0; i < n / 2; i++) acc += data[i];
+    for (int i = 0; i < n / 2; i++)
+        acc += data[i];
     *sink = acc;
-    for (int i = n / 2; i < n; i++) data[i] = i + 1;
+    for (int i = n / 2; i < n; i++)
+        data[i] = i + 1;
 }
 
 typedef enum { WL_READ = 0, WL_WRITE, WL_MIXED } workload_t;
 #define N_WORKLOADS 3
-static const workload_t WORKLOADS[N_WORKLOADS] = { WL_READ, WL_WRITE, WL_MIXED };
+static const workload_t WORKLOADS[N_WORKLOADS] = {WL_READ, WL_WRITE, WL_MIXED};
 
 static const char *wl_name(workload_t wl)
 {
     switch (wl) {
-        case WL_READ:  return "READ";
-        case WL_WRITE: return "WRITE";
-        case WL_MIXED: return "MIXED";
+        case WL_READ:
+            return "READ";
+        case WL_WRITE:
+            return "WRITE";
+        case WL_MIXED:
+            return "MIXED";
     }
     return "?";
 }
@@ -76,38 +82,37 @@ static void launch_kernel(workload_t wl, int *managed, int num_ints, int *sink_d
     }
 }
 
-static void procfs_write(const char *path, const char *val)
+static void tracking_on(void)
 {
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
-    close(fd);
+    int rc = dt_start("delta");
+    if (rc) {
+        fprintf(stderr, "start failed: %s\n", strerror(-rc));
+        exit(1);
+    }
 }
 
-static int sysfs_exists(const char *p)
+static void tracking_off(void)
 {
-    struct stat st;
-    return stat(p, &st) == 0;
+    int rc = dt_stop();
+    if (rc) {
+        fprintf(stderr, "stop failed: %s\n", strerror(-rc));
+        exit(1);
+    }
 }
 
-
-static void tracking_on(void)  {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_START, buf);
+static void reset_table(void)
+{
+    int rc = dt_stop();
+    if (rc) {
+        fprintf(stderr, "stop (reset) failed: %s\n", strerror(-rc));
+        exit(1);
+    }
+    rc = dt_start("delta");
+    if (rc) {
+        fprintf(stderr, "start (reset) failed: %s\n", strerror(-rc));
+        exit(1);
+    }
 }
-static void tracking_off(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
-}
-static void reset_table(void)  {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    procfs_write(PROCFS_STOP, buf);
-    procfs_write(PROCFS_START, buf);
-}
-
 
 static double wall_ms(void)
 {
@@ -125,16 +130,19 @@ typedef struct {
 
 static bench_t stats(double *k, double *w, int n)
 {
-    bench_t r = { 0, 0, 0, 0 };
-    for (int i = 0; i < n; i++) { r.kernel_avg_ms += k[i]; r.wall_avg_ms += w[i]; }
+    bench_t r = {0, 0, 0, 0};
+    for (int i = 0; i < n; i++) {
+        r.kernel_avg_ms += k[i];
+        r.wall_avg_ms += w[i];
+    }
     r.kernel_avg_ms /= n;
-    r.wall_avg_ms   /= n;
+    r.wall_avg_ms /= n;
     for (int i = 0; i < n; i++) {
         r.kernel_std_ms += (k[i] - r.kernel_avg_ms) * (k[i] - r.kernel_avg_ms);
-        r.wall_std_ms   += (w[i] - r.wall_avg_ms)   * (w[i] - r.wall_avg_ms);
+        r.wall_std_ms += (w[i] - r.wall_avg_ms) * (w[i] - r.wall_avg_ms);
     }
     r.kernel_std_ms = sqrt(r.kernel_std_ms / n);
-    r.wall_std_ms   = sqrt(r.wall_std_ms   / n);
+    r.wall_std_ms = sqrt(r.wall_std_ms / n);
     return r;
 }
 
@@ -142,7 +150,7 @@ static bench_t run_bench(int *managed, int *sink_dev,
                          int num_pages, int num_iters, workload_t wl,
                          int tracking)
 {
-    int num_ints = num_pages * PAGE_SIZE / sizeof(int);
+    int num_ints = num_pages * PAGE_SIZE / (int)sizeof(int);
 
     double *k_times = (double *)malloc(num_iters * sizeof(double));
     double *w_times = (double *)malloc(num_iters * sizeof(double));
@@ -153,8 +161,7 @@ static bench_t run_bench(int *managed, int *sink_dev,
 
     if (tracking) {
         tracking_on();
-    } 
-    else {
+    } else {
         launch_kernel(wl, managed, num_ints, sink_dev);
         CUDA_CHECK(cudaDeviceSynchronize());
     }
@@ -178,7 +185,8 @@ static bench_t run_bench(int *managed, int *sink_dev,
         w_times[i] = t1 - t0;
     }
 
-    if (tracking) tracking_off();
+    if (tracking)
+        tracking_off();
 
     bench_t result = stats(k_times, w_times, num_iters);
     free(k_times);
@@ -194,13 +202,16 @@ int main(void)
         fprintf(stderr, "ERROR: must run as root\n");
         return 1;
     }
-    if (!sysfs_exists(PROCFS_START)) {
-        fprintf(stderr, "ERROR: %s not found - is the nvidia-uvm module loaded?\n", PROCFS_START);
+    if (!dt_sysfs_exists(DT_PROCFS_START)) {
+        fprintf(stderr, "ERROR: %s not found - is the nvidia-uvm module loaded?\n",
+                DT_PROCFS_START);
         return 1;
     }
 
-    pid_t my_pid = getpid();    int max_pages = PAGE_COUNTS[N_PAGE_COUNTS - 1];
-    int *managed  = NULL;
+    pid_t my_pid = getpid();
+    int max_pages = PAGE_COUNTS[N_PAGE_COUNTS - 1];
+
+    int *managed = NULL;
     int *sink_dev = NULL;
     CUDA_CHECK(cudaMallocManaged(&managed, (size_t)max_pages * PAGE_SIZE));
     CUDA_CHECK(cudaMalloc(&sink_dev, sizeof(int)));
@@ -210,80 +221,53 @@ int main(void)
     fprintf(stderr, "[tc02] pid=%d  managed=0x%lx  max_pages=%d\n",
             my_pid, (unsigned long)managed, max_pages);
 
-    printf("workload,pages,iterations,tracking,"
-           "kernel_avg_ms,kernel_std_ms,wall_avg_ms,wall_std_ms,wall_overhead_pct\n");
-
-    int   total_rows  = N_WORKLOADS * N_PAGE_COUNTS * N_ITER_COUNTS;
-    int   row         = 0;
+    int total_rows = N_WORKLOADS * N_PAGE_COUNTS * N_ITER_COUNTS;
+    int row = 0;
 
     typedef struct {
-        workload_t wl; int pages, iters;
+        workload_t wl;
+        int pages, iters;
         bench_t off, on;
     } row_t;
 
     row_t *rows = (row_t *)malloc(total_rows * sizeof(row_t));
 
     for (int wi = 0; wi < N_WORKLOADS; wi++) {
+        workload_t wl = WORKLOADS[wi];
         for (int pi = 0; pi < N_PAGE_COUNTS; pi++) {
             for (int ii = 0; ii < N_ITER_COUNTS; ii++) {
-                workload_t wl    = WORKLOADS[wi];
-                int        pages = PAGE_COUNTS[pi];
-                int        iters = ITER_COUNTS[ii];
+                int pages = PAGE_COUNTS[pi];
+                int iters = ITER_COUNTS[ii];
 
                 fprintf(stderr, "[tc02] %-5s  pages=%-4d  iters=%-3d  ...\n",
                         wl_name(wl), pages, iters);
 
                 bench_t off = run_bench(managed, sink_dev, pages, iters, wl, 0);
-                bench_t on  = run_bench(managed, sink_dev, pages, iters, wl, 1);
+                bench_t on = run_bench(managed, sink_dev, pages, iters, wl, 1);
 
-                double ovhd = (off.wall_avg_ms > 0.0)
-                              ? (on.wall_avg_ms - off.wall_avg_ms) / off.wall_avg_ms * 100.0
-                              : 0.0;
-
-                printf("%s,%d,%d,OFF,%.4f,%.4f,%.4f,%.4f,-\n",
-                       wl_name(wl), pages, iters,
-                       off.kernel_avg_ms, off.kernel_std_ms,
-                       off.wall_avg_ms,   off.wall_std_ms);
-                printf("%s,%d,%d,ON,%.4f,%.4f,%.4f,%.4f,%.1f\n",
-                       wl_name(wl), pages, iters,
-                       on.kernel_avg_ms, on.kernel_std_ms,
-                       on.wall_avg_ms,   on.wall_std_ms,
-                       ovhd);
-
-                rows[row].wl    = wl;
-                rows[row].pages = pages;
-                rows[row].iters = iters;
-                rows[row].off   = off;
-                rows[row].on    = on;
-                row++;
+                rows[row++] = (row_t){wl, pages, iters, off, on};
             }
         }
     }
 
-    fprintf(stderr, "\n%-5s  %5s  %5s  | %10s  %10s  | %8s\n",
-            "WL", "pages", "iters", "wall_OFF ms", "wall_ON  ms", "overhead%");
-    fprintf(stderr, "%.5s  %.5s  %.5s  | %.10s  %.10s  | %.8s\n",
-            "-----", "-----", "-----", "----------", "----------", "--------");
+    fprintf(stderr, "\n+------------+-------+-------+--------------+--------------+-----------+\n");
+    fprintf(stderr, "| %-10s | %5s | %5s | %12s | %12s | %9s |\n",
+            "WL", "pages", "iters", "wall_OFF ms", "wall_ON ms", "overhead%");
+    fprintf(stderr, "+------------+-------+-------+--------------+--------------+-----------+\n");
 
-    for (int r = 0; r < row; r++) {
-        double ovhd = (rows[r].off.wall_avg_ms > 0.0)
-                      ? (rows[r].on.wall_avg_ms - rows[r].off.wall_avg_ms)
-                        / rows[r].off.wall_avg_ms * 100.0
-                      : 0.0;
-        fprintf(stderr, "%-5s  %5d  %5d  | %10.4f  %10.4f  | %+7.1f%%\n",
-                wl_name(rows[r].wl),
-                rows[r].pages,
-                rows[r].iters,
-                rows[r].off.wall_avg_ms,
-                rows[r].on.wall_avg_ms,
-                ovhd);
+    for (int i = 0; i < row; i++) {
+        row_t *r = &rows[i];
+        double ovhd_pct =
+            (r->off.wall_avg_ms > 0.0)
+                ? 100.0 * (r->on.wall_avg_ms - r->off.wall_avg_ms) / r->off.wall_avg_ms
+                : 0.0;
+        fprintf(stderr, "| %-10s | %5d | %5d | %12.4f | %12.4f | %+8.1f%% |\n",
+                wl_name(r->wl), r->pages, r->iters,
+                r->off.wall_avg_ms, r->on.wall_avg_ms, ovhd_pct);
     }
-
+    fprintf(stderr, "+------------+-------+-------+--------------+--------------+-----------+\n");
     free(rows);
     CUDA_CHECK(cudaFree(managed));
     CUDA_CHECK(cudaFree(sink_dev));
-
-    fprintf(stderr, "[tc02] done.\n");
     return 0;
 }
-

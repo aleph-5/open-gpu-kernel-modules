@@ -1,19 +1,16 @@
+#include <cuda_runtime.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
 #include <unistd.h>
-#include <cuda_runtime.h>
+
+#include "../common/dirty_tracking_procfs.h"
 
 #define PAGE_SIZE   4096
 #define NUM_PAGES   4096
 #define ITERATIONS  100
 #define ALLOC_SIZE  ((size_t)NUM_PAGES * PAGE_SIZE)
-
-#define PROCFS_START "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP  "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_DIRTY_PAGES "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE "/proc/driver/nvidia-uvm/dirty_range"
 
 #define CUDA_CHECK(call)                                                    \
     do {                                                                    \
@@ -25,65 +22,20 @@
         }                                                                   \
     } while (0)
 
-static void write_str_to_procfs(const char *path, const char *val)
+static int snapshot_and_count_recorded_pages(volatile char *buf, size_t size)
 {
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
-    close(fd);
-}
-
-
-static void write_range_to_procfs(const char *path, unsigned long start, unsigned long end)
-{
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "0x%lx 0x%lx\n", start, end);
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, buf, n) != n) { perror("write range procfs"); close(fd); exit(1); }
-    close(fd);
-}
-
-static void start_tracking(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    write_str_to_procfs(PROCFS_START, buf);
-}
-static void stop_tracking(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    write_str_to_procfs(PROCFS_STOP, buf);
-}
-
-static int count_recorded_pages(volatile char *buf, size_t size)
-{
-    char line[256];
-    int count = 0;
-    FILE *fp;
-    write_range_to_procfs(PROCFS_RANGE,
-                          (unsigned long)buf,
-                          (unsigned long)buf + size);
-
-    fp = fopen(PROCFS_DIRTY_PAGES, "r");
-    if (!fp) {
-        perror(PROCFS_DIRTY_PAGES);
+    int rc = dt_cutover();
+    if (rc) {
+        fprintf(stderr, "cutover failed: %s\n", strerror(-rc));
         exit(1);
     }
 
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active") || strstr(line, "invalid range")) {
-                fprintf(stderr, "dirty_pages query failed: %s", line);
-                fclose(fp);
-                exit(1);
-            }
-            continue;
-        }
-        count++;
+    int n = dt_dump_count_pages_in_range((unsigned long)buf, size, PAGE_SIZE);
+    if (n < 0) {
+        fprintf(stderr, "dump failed: %s\n", strerror(-n));
+        exit(1);
     }
-
-    fclose(fp);
-    return count;
+    return n;
 }
 
 /* Single thread writes one byte to the first byte of each page */
@@ -95,10 +47,19 @@ __global__ void write_pages(volatile char *buf, int num_pages)
 
 int main(void)
 {
-    pid_t pid = getpid();
-    printf("The pid is : %d\n", pid); 
-    volatile char *buf;
+    printf("pid: %d\n", getpid());
 
+    if (geteuid() != 0) {
+        fprintf(stderr, "ERROR: must run as root\n");
+        return 1;
+    }
+    if (!dt_sysfs_exists(DT_PROCFS_START)) {
+        fprintf(stderr, "ERROR: %s not found - is the nvidia-uvm module loaded?\n",
+                DT_PROCFS_START);
+        return 1;
+    }
+
+    volatile char *buf;
     CUDA_CHECK(cudaMallocManaged((void **)&buf, ALLOC_SIZE));
 
     cudaEvent_t ev_start, ev_stop;
@@ -106,7 +67,7 @@ int main(void)
     CUDA_CHECK(cudaEventCreate(&ev_stop));
 
     // warmup
-    write_pages<<<1,1>>>(buf, NUM_PAGES);
+    write_pages<<<1, 1>>>(buf, NUM_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
 
     float times_no_track[ITERATIONS];
@@ -130,7 +91,13 @@ int main(void)
         CUDA_CHECK(cudaEventElapsedTime(&times_no_track[iter], ev_start, ev_stop));
 
         memset((void *)buf, 0, ALLOC_SIZE);
-        start_tracking();
+        {
+            int rc = dt_start("delta");
+            if (rc) {
+                fprintf(stderr, "start failed: %s\n", strerror(-rc));
+                return 1;
+            }
+        }
 
         CUDA_CHECK(cudaEventRecord(ev_start));
         write_pages<<<1, 1>>>(buf, NUM_PAGES);
@@ -138,7 +105,7 @@ int main(void)
         CUDA_CHECK(cudaEventSynchronize(ev_stop));
         CUDA_CHECK(cudaEventElapsedTime(&times_with_track[iter], ev_start, ev_stop));
 
-        recorded_pages[iter] = count_recorded_pages(buf, ALLOC_SIZE);
+        recorded_pages[iter] = snapshot_and_count_recorded_pages(buf, ALLOC_SIZE);
         if (recorded_pages[iter] != NUM_PAGES) {
             fprintf(stderr,
                     "iteration %d: expected %d recorded pages, got %d\n",
@@ -146,8 +113,14 @@ int main(void)
                     NUM_PAGES,
                     recorded_pages[iter]);
         }
-        
-        stop_tracking();
+
+        {
+            int rc = dt_stop();
+            if (rc) {
+                fprintf(stderr, "stop failed: %s\n", strerror(-rc));
+                return 1;
+            }
+        }
 
         fprintf(csv,
                 "%d,%.6f,%.6f,%d\n",
@@ -156,15 +129,16 @@ int main(void)
                 times_with_track[iter],
                 recorded_pages[iter]);
     }
+
     fclose(csv);
     printf("per-iteration results written to %s\n", csv_path);
 
     double sum_no = 0.0, sum_with = 0.0;
     for (int i = 0; i < ITERATIONS; i++) {
-        sum_no   += times_no_track[i];
+        sum_no += times_no_track[i];
         sum_with += times_with_track[i];
     }
-    double avg_no   = sum_no   / ITERATIONS;
+    double avg_no = sum_no / ITERATIONS;
     double avg_with = sum_with / ITERATIONS;
 
     printf("average_no_tracking_ms,  %.6f\n", avg_no);

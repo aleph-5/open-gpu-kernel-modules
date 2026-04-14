@@ -1,10 +1,11 @@
+#include <cuda_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <fcntl.h>
-#include <unistd.h>
 #include <time.h>
-#include <cuda_runtime.h>
+#include <unistd.h>
+
+#include "../common/dirty_tracking_procfs.h"
 
 #define PAGE_SIZE       4096
 #define MAX_STREAMS     8
@@ -12,11 +13,6 @@
 #define ALLOC_SIZE      ((size_t)MAX_STREAMS * MAX_N * PAGE_SIZE)
 #define ITERATIONS      100
 #define FAULT_CHUNK     64
-
-#define PROCFS_START     "/proc/driver/nvidia-uvm/dirty_tracking_start"
-#define PROCFS_STOP      "/proc/driver/nvidia-uvm/dirty_tracking_stop"
-#define PROCFS_DIRTY     "/proc/driver/nvidia-uvm/dirty_pages"
-#define PROCFS_RANGE     "/proc/driver/nvidia-uvm/dirty_range"
 
 static const int STREAM_COUNTS[] = {1, 2, 4, 8};
 #define NUM_STREAM_COUNTS (int)(sizeof(STREAM_COUNTS) / sizeof(STREAM_COUNTS[0]))
@@ -34,69 +30,20 @@ static const int PAGE_COUNTS[] = {64, 256, 1024, 4096};
         }                                                                   \
     } while (0)
 
-static void write_str_to_procfs(const char *path, const char *val)
+static int snapshot_and_count_recorded_pages(volatile char *buf, size_t size)
 {
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { perror(path); exit(1); }
-    if (write(fd, val, strlen(val)) < 0) { perror("write"); exit(1); }
-    close(fd);
-}
-
-
-static void write_range_to_procfs(const char *path, unsigned long start, unsigned long end)
-{
-    char buf[64];
-    int n = snprintf(buf, sizeof(buf), "0x%lx 0x%lx\n", start, end);
-    int fd = open(path, O_WRONLY);
-    if (fd < 0) { 
-        perror(path); 
-        exit(1); 
-    }
-    if (write(fd, buf, n) != n) { 
-        perror("write range procfs"); 
-        close(fd); 
-        exit(1); 
-    }
-    close(fd);
-}
-
-static void start_tracking(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    write_str_to_procfs(PROCFS_START, buf);
-}
-static void stop_tracking(void) {
-    char buf[16];
-    snprintf(buf, sizeof(buf), "%d", getpid());
-    write_str_to_procfs(PROCFS_STOP, buf);
-}
-
-static int count_recorded_pages(volatile char *buf, size_t size)
-{
-    char line[256];
-    int count = 0;
-    write_range_to_procfs(PROCFS_RANGE, (unsigned long)buf, (unsigned long)buf + size);
-
-    FILE *fp = fopen(PROCFS_DIRTY, "r");
-    if (!fp) { 
-        perror(PROCFS_DIRTY); 
-        exit(1); 
+    int rc = dt_cutover();
+    if (rc) {
+        fprintf(stderr, "cutover failed: %s\n", strerror(-rc));
+        exit(1);
     }
 
-    while (fgets(line, sizeof(line), fp)) {
-        if (line[0] == '#') {
-            if (strstr(line, "not active") || strstr(line, "invalid range")) {
-                fprintf(stderr, "dirty_pages query failed: %s", line);
-                fclose(fp);
-                exit(1);
-            }
-            continue;
-        }
-        count++;
+    int n = dt_dump_count_pages_in_range((unsigned long)buf, size, PAGE_SIZE);
+    if (n < 0) {
+        fprintf(stderr, "dump failed: %s\n", strerror(-n));
+        exit(1);
     }
-
-    fclose(fp);
-    return count;
+    return n;
 }
 
 static double elapsed_us(struct timespec *t0, struct timespec *t1)
@@ -110,15 +57,25 @@ __global__ void write_pages(volatile char *buf, int n_pages)
     int n_chunks = (n_pages + FAULT_CHUNK - 1) / FAULT_CHUNK;
     for (int chunk = 0; chunk < n_chunks; chunk++) {
         int page = chunk * FAULT_CHUNK + tid;
-        if (page < n_pages) buf[(size_t)page * PAGE_SIZE] = (char)page;
+        if (page < n_pages)
+            buf[(size_t)page * PAGE_SIZE] = (char)page;
         __syncthreads();
     }
 }
 
 int main(void)
 {
-    pid_t pid = getpid();
-    printf("pid: %d\n", pid);
+    printf("pid: %d\n", getpid());
+
+    if (geteuid() != 0) {
+        fprintf(stderr, "ERROR: must run as root\n");
+        return 1;
+    }
+    if (!dt_sysfs_exists(DT_PROCFS_START)) {
+        fprintf(stderr, "ERROR: %s not found - is the nvidia-uvm module loaded?\n",
+                DT_PROCFS_START);
+        return 1;
+    }
 
     volatile char *buf;
     CUDA_CHECK(cudaMallocManaged((void **)&buf, ALLOC_SIZE));
@@ -133,7 +90,10 @@ int main(void)
 
     const char *csv_path = "record_contention_cost.csv";
     FILE *csv = fopen(csv_path, "w");
-    if (!csv) { perror(csv_path); exit(1); }
+    if (!csv) {
+        perror(csv_path);
+        exit(1);
+    }
     fprintf(csv, "condition,streams,pages_per_stream,iteration,elapsed_us,recorded_pages\n");
 
     /* Disjoint pages: each stream touches a separate set of pages [s*n, (s+1)*n) */
@@ -149,22 +109,33 @@ int main(void)
             struct timespec t0, t1;
 
             for (int iter = 0; iter < ITERATIONS; iter++) {
-                start_tracking();
+                int rc = dt_start("delta");
+                if (rc) {
+                    fprintf(stderr, "start failed: %s\n", strerror(-rc));
+                    return 1;
+                }
                 CUDA_CHECK(cudaDeviceSynchronize());
 
                 clock_gettime(CLOCK_MONOTONIC, &t0);
                 for (int s = 0; s < S; s++)
-                    write_pages<<<1, FAULT_CHUNK, 0, streams[s]>>>(buf + (size_t)s * n * PAGE_SIZE, n);
+                    write_pages<<<1, FAULT_CHUNK, 0, streams[s]>>>(
+                        buf + (size_t)s * n * PAGE_SIZE, n);
                 CUDA_CHECK(cudaDeviceSynchronize());
                 clock_gettime(CLOCK_MONOTONIC, &t1);
 
                 double t = elapsed_us(&t0, &t1);
 
-                int recorded = count_recorded_pages(buf, (size_t)S * n * PAGE_SIZE);
+                int recorded = snapshot_and_count_recorded_pages(buf, (size_t)S * n * PAGE_SIZE);
                 if (recorded != S * n)
-                    fprintf(stderr, "disjoint iter %d (S=%d n=%d): expected %d got %d\n", iter, S, n, S * n, recorded);
+                    fprintf(stderr,
+                            "disjoint iter %d (S=%d n=%d): expected %d got %d\n",
+                            iter, S, n, S * n, recorded);
 
-                stop_tracking();
+                rc = dt_stop();
+                if (rc) {
+                    fprintf(stderr, "stop failed: %s\n", strerror(-rc));
+                    return 1;
+                }
 
                 fprintf(csv, "disjoint,%d,%d,%d,%.3f,%d\n", S, n, iter, t, recorded);
                 sum += t;
@@ -187,7 +158,11 @@ int main(void)
             struct timespec t0, t1;
 
             for (int iter = 0; iter < ITERATIONS; iter++) {
-                start_tracking();
+                int rc = dt_start("delta");
+                if (rc) {
+                    fprintf(stderr, "start failed: %s\n", strerror(-rc));
+                    return 1;
+                }
                 CUDA_CHECK(cudaDeviceSynchronize());
 
                 clock_gettime(CLOCK_MONOTONIC, &t0);
@@ -198,11 +173,17 @@ int main(void)
 
                 double t = elapsed_us(&t0, &t1);
 
-                int recorded = count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
+                int recorded = snapshot_and_count_recorded_pages(buf, (size_t)n * PAGE_SIZE);
                 if (recorded != n)
-                    fprintf(stderr, "hot set iter %d (S=%d n=%d): expected %d got %d\n", iter, S, n, n, recorded);
+                    fprintf(stderr,
+                            "hot set iter %d (S=%d n=%d): expected %d got %d\n",
+                            iter, S, n, n, recorded);
 
-                stop_tracking();
+                rc = dt_stop();
+                if (rc) {
+                    fprintf(stderr, "stop failed: %s\n", strerror(-rc));
+                    return 1;
+                }
 
                 fprintf(csv, "hot_set,%d,%d,%d,%.3f,%d\n", S, n, iter, t, recorded);
                 sum += t;
