@@ -11121,7 +11121,7 @@ static uvm_prot_t compute_new_permission(uvm_va_block_t *va_block,
         if (uvm_processor_mask_empty(revoke_processors))
             new_prot = UVM_PROT_READ_WRITE;
         // EDIT BY ADITI KHANDELIA
-        if (uvm_dirty_tracking_started() && access_type < UVM_FAULT_ACCESS_TYPE_WRITE)
+        if (uvm_owner_tgid_with_dirty_tracking_started() == va_space->owner_tgid && access_type < UVM_FAULT_ACCESS_TYPE_WRITE)
             new_prot = UVM_PROT_READ_ONLY;
         // END OF EDIT
     }
