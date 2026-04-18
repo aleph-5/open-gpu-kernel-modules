@@ -34,11 +34,11 @@ def color(text, code):
 
 # (binary, [csv outputs it produces])
 BENCHMARKS = [
-    ("single_fault_record_cost",  ["single_fault_record_cost.csv"]),
-    ("duplicate_fault_skip_cost", ["duplicate_fault_skip_cost.csv"]),
-    ("record_contention_cost",    ["record_contention_cost.csv"]),
-    ("table_lifecycle_cost",      ["table_init_cost.csv", "table_destroy_cost.csv", "table_reinit_cost.csv"]),
-    ("basic_rmw",                 []),
+    ("tc01_basic_rmw",                 []),
+    ("tc02_duplicate_fault_skip_cost", ["tc02_duplicate_fault_skip_cost.csv"]), 
+    ("tc03_record_contention_cost",    ["tc03_record_contention_cost.csv"]),
+    ("tc04_single_fault_record_cost",  ["tc04_single_fault_record_cost.csv"]),
+    ("tc05_table_lifecycle_cost",      ["tc05_table_init_cost.csv", "tc05_table_destroy_cost.csv", "tc05_table_reinit_cost.csv"]),
 ]
 
 

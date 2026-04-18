@@ -131,7 +131,7 @@ int main(void)
     /* ------------------------------------------------------------------
      * Init cost
      * ------------------------------------------------------------------ */
-    const char *csv_path = "table_init_cost.csv";
+    const char *csv_path = "tc05_table_init_cost.csv";
     FILE *csv = fopen(csv_path, "w");
     if (!csv) {
         perror(csv_path);
@@ -172,7 +172,7 @@ int main(void)
      * ------------------------------------------------------------------ */
     printf("----measuring destroy cost for page counts in {64, 256, 1024, 4096, 16384}----\n");
 
-    const char *csv_path2 = "table_destroy_cost.csv";
+    const char *csv_path2 = "tc05_table_destroy_cost.csv";
     FILE *csv2 = fopen(csv_path2, "w");
     if (!csv2) {
         perror(csv_path2);
@@ -220,7 +220,7 @@ int main(void)
 
     printf("----measuring reinit cost (dirty_pages x read_pages)----\n");
 
-    const char *csv_path3 = "table_reinit_cost.csv";
+    const char *csv_path3 = "tc05_table_reinit_cost.csv";
     FILE *csv3 = fopen(csv_path3, "w");
     if (!csv3) {
         perror(csv_path3);

@@ -78,7 +78,7 @@ int main(void)
     write_pages<<<1, FAULT_CHUNK>>>(buf, MAX_PAGES);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    const char *csv_path = "duplicate_fault_skip_cost.csv";
+    const char *csv_path = "tc02_duplicate_fault_skip_cost.csv";
     FILE *csv = fopen(csv_path, "w");
     if (!csv) {
         perror(csv_path);

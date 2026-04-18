@@ -74,7 +74,7 @@ int main(void)
     float times_with_track[ITERATIONS];
     int recorded_pages[ITERATIONS];
 
-    const char *csv_path = "single_fault_record_cost.csv";
+    const char *csv_path = "tc04_single_fault_record_cost.csv";
     FILE *csv = fopen(csv_path, "w");
     if (!csv) {
         perror(csv_path);

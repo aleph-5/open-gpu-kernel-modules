@@ -88,7 +88,7 @@ int main(void)
     write_pages<<<1, FAULT_CHUNK>>>(buf, MAX_STREAMS * MAX_N);
     CUDA_CHECK(cudaDeviceSynchronize());
 
-    const char *csv_path = "record_contention_cost.csv";
+    const char *csv_path = "tc03_record_contention_cost.csv";
     FILE *csv = fopen(csv_path, "w");
     if (!csv) {
         perror(csv_path);

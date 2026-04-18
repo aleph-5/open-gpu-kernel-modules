@@ -24,31 +24,16 @@ tests/test_dirty_tracking_suite
 
 perf.*
 
-tests/address_range_filtering/tc04_inverted_and_zero_range
-tests/address_range_filtering/tc05_filter_before_start_track
-tests/address_range_filtering/tc03_subpage_start_rounding
-tests/address_range_filtering/tc01_two_alloc_range_isolation
-tests/address_range_filtering/tc02_range_sequential_reads_threaded
-tests/latency/tc02_ts_sleep_coherence
-tests/latency/tc01_fault_to_visibility_latency
-tests/table_lifecycle/tc03_stop_start_empty_table
-tests/table_lifecycle/tc05_two_allocs_one_table
-tests/table_lifecycle/tc01_basic_lifecycle
-tests/table_lifecycle/tc02_reinit_clears_entries
-tests/table_lifecycle/tc04_multi_reinit_stress
-tests/ordering/tc02_ts_monotonic
-tests/ordering/tc03_query_nondestructive
-tests/ordering/tc04_empty_table_active
-tests/ordering/tc01_write_before_start
-tests/ordering/tc05_epoch_isolation
-tests/ordering/tc06_concurrent_streams
-tests/ordering/tc07_sentinel_flood
-tests/ordering/tc08_flood_between_queries
-tests/generic/test_dirty_tracking_suite
-tests/performance_testing/perf_dirty_tracking
-tests/performance_testing/dirty_benchmark
-tests/performance_testing/tc01_stress_testing
-tests/performance_testing/tc02_performance_overhead
+# Ignore test binaries
+correctness_tests/tc*
+performance_tests/tc*
+
+# Dont ignore the source cuda file
+!correctness_tests/tc*.cu
+!performance_tests/tc*.cu
+
+# Dont ignore the output csv files for perf testing
+!performance_tests/tc*.csv
 
 temp
 **/__pycache__/
