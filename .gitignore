@@ -25,15 +25,15 @@ tests/test_dirty_tracking_suite
 perf.*
 
 # Ignore test binaries
-correctness_tests/tc*
-performance_tests/tc*
+correctness_tests/**/tc*
+performance_tests/**/tc*
 
 # Dont ignore the source cuda file
-!correctness_tests/tc*.cu
-!performance_tests/tc*.cu
+!correctness_tests/**/tc*.cu
+!performance_tests/**/tc*.cu
 
 # Dont ignore the output csv files for perf testing
-!performance_tests/tc*.csv
+!performance_tests/**/tc*.csv
 
 temp
 **/__pycache__/

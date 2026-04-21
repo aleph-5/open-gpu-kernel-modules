@@ -1,0 +1,71 @@
+\section*{Milestones}
+
+\subsection*{Milestone 1 - Midsem Review}
+
+    \begin{enumerate}
+        \item \textbf{Literature Review, Technical Familiarization and other Preliminaries}
+        \begin{enumerate}
+            \item Review existing technical documentation and architectural specifications regarding UVM.
+            \item Conduct a code review of the UVM driver and perform preliminary API experimentation.
+        \end{enumerate}
+
+        \item \textbf{Implementation of Dirty Access Tracking in UVM Driver}
+        \begin{enumerate}
+            \item Add instrumentation and logging to observe runtime behaviour, including tracking page faults,
+                  permission transitions, migration events, and residency changes.
+            \item Implement the core dirty access tracking mechanism, including data structures for tracking
+                  dirty pages and the logic to update these structures on write faults.
+            \item Develop a \texttt{procfs}-based interface to allow user-space tools to query the set of
+                  dirty pages for a given process, including timestamps for each page.
+        \end{enumerate}
+
+        \item \textbf{Initial Performance Evaluation}
+        \begin{enumerate}
+            \item Evaluate the performance of the modified driver on small workloads, measuring metrics such
+                  as page fault latency and overall application runtime.
+            \item Identify and address any significant performance bottlenecks or correctness issues.
+        \end{enumerate}
+    \end{enumerate}
+
+\subsection*{Milestone 2 - Extensions, Testing and Optimisations}
+    \begin{enumerate}
+        \item \textbf{Extension of Functionality}
+        \begin{enumerate}
+            \item Move from full page-table invalidation to write-permission downgrade, reducing overhead
+                  for read-only accesses.
+            \item Implement pause/resume semantics so the user can gate recording without
+                  destroying the session.
+            \item Implement a barrier-protected cutover and snapshot query mechanism to define precise,
+                  linearizable epoch boundaries suitable for migration round accounting.
+            \item Add delta and cumulative query modes to support both per-round and session-union dirty sets.
+            \item Introduce a pluggable data-structure backend layer with multiple implementations
+                  (xarray, sorted vector, unsorted vector, linked list, bitmap, nested bitmap, chunked vector)
+                  to allow empirical selection based on workload characteristics.
+            \item Fix the \texttt{cudaMemPrefetchAsync} bypass by forcing \texttt{READ\_ONLY} mappings
+                  on GPU migration when tracking is active.
+        \end{enumerate}
+        \item \textbf{Testing and Analysis of Tracking Mechanism}
+        \begin{enumerate}
+            \item Test critical issues pertaining to concurrency and correctness that arise under
+                  multi-stream and multi-process workloads.
+            \item Quantify overhead introduced by dirty tracking across read, write, and mixed workloads.
+            \item Profile individual operations (insert, lookup, cutover, destroy) to identify bottlenecks.
+        \end{enumerate}
+        \item \textbf{Optimisation of Tracking Mechanism}
+        \begin{enumerate}
+            \item Replace the per-table mutex with a read-write semaphore to allow concurrent fault-handler
+                  insertions.
+            \item Add per-operation timing statistics and a toggle interface to measure overhead with zero
+                  cost when disabled.
+        \end{enumerate}
+    \end{enumerate}
+
+\subsection*{Milestone 3 - Final Deliverables}
+    \begin{enumerate}
+        \item Comprehensive correctness test suite covering determinism, snapshot isolation, cumulative
+              semantics, backend correctness, lifecycle races, procfs robustness, and scale.
+        \item Formal benchmarking results quantifying fault latency overhead, memory footprint,
+              and operation costs across representative workloads.
+        \item Final project report documenting the complete design, implementation, and evaluation.
+    \end{enumerate}
+

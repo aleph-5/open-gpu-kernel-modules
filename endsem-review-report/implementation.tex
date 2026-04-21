@@ -1,0 +1,200 @@
+\section*{Implementation}
+
+\subsection*{End-to-end Workflow}
+
+\subsection*{Modified Driver Files}
+All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}.
+The files containing functionality added or significantly modified by us are:
+
+\begin{enumerate}
+    \item \texttt{uvm\_common.h} / \texttt{uvm\_common.c} - The primary implementation file.
+          Defines \texttt{struct dirty\_page\_info} (page number, timestamp) and the three
+          global dirty-set tables (\texttt{g\_dirty\_ds}, \texttt{g\_dirty\_ds\_snapshot},
+          \texttt{g\_dirty\_ds\_cumulative}).
+          Implements table lifecycle (\texttt{uvm\_dirty\_page\_table\_init},
+          \texttt{uvm\_dirty\_page\_table\_destroy}), fault recording
+          (\texttt{uvm\_dirty\_page\_table\_record}), snapshot management
+          (\texttt{uvm\_dirty\_new\_snapshot}, \texttt{uvm\_dirty\_merge\_snapshot\_into\_cumulative\_locked}),
+          and all eight \texttt{procfs} handler implementations including
+          \texttt{uvm\_dirty\_procfs\_init}.
+          Exports function pointers (\texttt{uvm\_dirty\_invalidate\_fn},
+          \texttt{uvm\_dirty\_activate\_now\_fn}, \texttt{uvm\_dirty\_barrier\_end\_fn},
+          \texttt{uvm\_dirty\_query\_barrier\_begin\_fn},
+          \texttt{uvm\_dirty\_query\_barrier\_end\_fn}) that are registered from
+          \texttt{uvm\_va\_space.c} at module init.
+
+    \item \texttt{uvm\_dirty\_ds.h} - Defines the \texttt{uvm\_dirty\_ds\_ops} interface
+          (init, insert, lookup, for\_each\_in\_range, destroy), the \texttt{uvm\_dirty\_ds}
+          struct holding ops pointer, backend-private data, and statistics, and inline timing
+          wrappers for all operations.
+
+    \item \texttt{uvm\_dirty\_ds\_xarray.c} - xarray backend using atomic
+          \texttt{xa\_cmpxchg} for first-write-wins insert.
+
+    \item \texttt{uvm\_dirty\_ds\_vector.c} - Sorted dynamic array backend with
+          binary-search insert and lookup.
+
+    \item \texttt{uvm\_dirty\_ds\_vector\_unsorted.c} - Unsorted append-order vector
+          with spinlock, preserving fault-arrival order.
+
+    \item \texttt{uvm\_dirty\_ds\_linked\_list.c} - Singly-linked list with sentinel node.
+
+    \item \texttt{uvm\_dirty\_ds\_bitmap.c} - Flat bit array covering $2^{38}$ pages
+          (32\,MB fixed allocation); O(1) operations; timestamps not stored.
+
+    \item \texttt{uvm\_dirty\_ds\_nested\_bitmap.c} - Two-level hierarchical bitmap
+          for sparse page sets.
+
+    \item \texttt{uvm\_dirty\_ds\_chunked.c} - Chunked vector with a background
+          kthread sorter for deferred ordering.
+
+    \item \texttt{uvm\_gpu\_replayable\_faults.c} - The write-fault hook.
+          After standard fault servicing, checks \texttt{uvm\_dirty\_tracking\_active()}
+          and \texttt{service\_access\_type >= UVM\_FAULT\_ACCESS\_TYPE\_WRITE}, then
+          calls \texttt{uvm\_dirty\_page\_table\_record} with the faulting page number
+          and \texttt{ktime\_get\_ns()} timestamp.
+
+    \item \texttt{uvm\_va\_space.c} - Implements the barrier infrastructure.
+          \texttt{uvm\_dirty\_downgrade\_all\_permissions} walks all va-ranges and
+          va-blocks for the owner's va\_space, calling
+          \texttt{uvm\_va\_block\_revoke\_prot\_mask} with \texttt{UVM\_PROT\_READ\_WRITE}
+          to strip write access from all GPU PTEs, followed by \texttt{uvm\_tracker\_wait}
+          to confirm GPU processing.
+          \texttt{uvm\_dirty\_query\_barrier\_begin} and
+          \texttt{uvm\_dirty\_query\_barrier\_end} implement the cutover barrier by
+          locking all parent GPU replayable-fault ISRs and spinning until the fault
+          buffer is empty.
+          \texttt{uvm\_va\_space\_dirty\_init} registers all five function pointers
+          at module init.
+
+    \item \texttt{uvm\_va\_block.c} - \texttt{compute\_new\_permission} modified to
+          force \texttt{READ\_ONLY} on read faults when tracking is active for the
+          faulting va\_space's owner, preventing read faults from obtaining write
+          mappings that would bypass recording.
+
+    \item \texttt{uvm\_migrate.c} - \texttt{block\_migrate\_map\_unmapped\_pages}
+          modified to map GPU-migrated pages as \texttt{READ\_ONLY} when tracking is
+          active, closing the \texttt{cudaMemPrefetchAsync} bypass.
+
+    \item \texttt{uvm.c} - Top-level integration; calls \texttt{uvm\_dirty\_procfs\_init}
+          and \texttt{uvm\_va\_space\_dirty\_init} during module initialisation.
+\end{enumerate}
+
+\subsection*{Procfs Interface}
+
+Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
+
+\begin{enumerate}
+    \item \texttt{dirty\_tracking\_start} (write) -
+          Input \texttt{"<pid> <delta|cumulative>"}.
+          Initialises the live table, downgrades all GPU write permissions, and
+          sets \texttt{active = true}.
+
+    \item \texttt{dirty\_tracking\_stop} (write) -
+          Input \texttt{"<pid>"}.
+          Destroys all tracking state (live, snapshot, cumulative tables) and
+          flushes accumulated statistics to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
+
+    \item \texttt{dirty\_tracking\_pause} (write) -
+          Input \texttt{"<pid>"}.
+          Soft gate flip: sets \texttt{active = false}.
+          In-flight fault handlers may still complete a record insertion.
+
+    \item \texttt{dirty\_tracking\_resume} (write) -
+          Input \texttt{"<pid>"}.
+          Re-runs the full downgrade and activation sequence, re-establishing the
+          deterministic write-fault frontier.
+
+    \item \texttt{dirty\_tracking\_query\_cutover} (write) -
+          Input \texttt{"<pid>"}.
+          Acquires the query barrier, atomically swaps live table to snapshot and
+          installs a fresh live table, increments \texttt{g\_dirty\_epoch}, sets
+          \texttt{g\_snapshot\_pending = true}, releases barrier.
+          Returns \texttt{EBUSY} if a snapshot is already pending.
+
+    \item \texttt{dirty\_tracking\_query\_dump} (read) -
+          Requires \texttt{g\_snapshot\_pending = true}.
+          In \texttt{delta} mode emits the snapshot pages and destroys it.
+          In \texttt{cumulative} mode merges snapshot into
+          \texttt{g\_dirty\_ds\_cumulative} (first-write-wins) then emits the
+          cumulative union.
+          Output format: one line per page, \texttt{0x\textit{addr}\ \textit{timestamp\_ns}}.
+
+    \item \texttt{dirty\_ds\_stats\_toggle} (write) -
+          Input \texttt{"enable"} or \texttt{"disable"}.
+          Enabling resets all counters for a clean measurement window.
+
+    \item \texttt{dirty\_ds\_stats} (read) -
+          Emits per-operation counts and total nanoseconds for init, insert,
+          lookup, for-each, destroy, insert lock-wait, lookup lock-wait, and the
+          three callback operations (invalidate, activate, barrier-end).
+\end{enumerate}
+
+\subsection*{Design Choices}
+\subsubsection*{Determinism Guarantees}
+\subsubsection*{Data Structures}
+\paragraph{Global state}
+Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
+\begin{enumerate}
+    \item \texttt{g\_dirty\_ds} - live table; fault handler inserts here.
+    \item \texttt{g\_dirty\_ds\_snapshot} - frozen copy created by cutover;
+          exists only between a cutover and the subsequent dump.
+    \item \texttt{g\_dirty\_ds\_cumulative} - session-union table used in
+          cumulative mode; merge-accumulates snapshot contents at each dump.
+\end{enumerate}
+
+\paragraph{Backend abstraction}
+All three tables share the \texttt{uvm\_dirty\_ds\_ops} interface
+(\texttt{uvm\_dirty\_ds.h}), which provides init, insert, lookup,
+for\_each\_in\_range, and destroy.
+Inline wrappers measure operation latency when statistics are enabled.
+The active backend is selected at compile time by setting the \texttt{.ops}
+pointer in the static \texttt{g\_dirty\_ds} initialiser.
+
+\subsubsection*{Locking}
+A read-write semaphore (\texttt{uvm\_dirty\_ds\_rwsem}) protects all three
+tables.
+Fault-handler insertions and lookups take the read side concurrently.
+Lifecycle operations (init, destroy, cutover swap) take the write side
+exclusively, blocking new insertions only during the brief pointer swap.
+A separate mutex (\texttt{uvm\_dirty\_lifecycle\_lock}) serialises the procfs
+lifecycle handlers (start, stop, pause, resume, cutover) against each other.
+
+
+
+% \subsection*{Design Overview}
+
+% The tracker exploits the GPU's replayable fault path.
+% Because UVM manages GPU memory demand-paging, every GPU access to an unmapped
+% or insufficiently-
+
+
+
+% permissioned page generates a replayable fault that is
+% serviced by the driver.
+% The tracker \emph{downgrades} GPU write
+% permissions at epoch start so that subsequent GPU writes generate faults.
+% The fault hook records the page, then restores write permission and replays
+% the instruction.
+% Read accesses are unaffected and do not generate faults.
+
+% \paragraph{Workflow}
+% A tracking session begins when the user writes to
+% \texttt{dirty\_tracking\_start}.
+% This initialises a fresh live table (\texttt{g\_dirty\_ds}) for the specified
+% process, walks all GPU page-table entries in the owner's va\_space and
+% strips write permission from each, then sets the global active flag.
+% Each GPU write fault is intercepted in the replayable fault-servicing path,
+% which records the faulting page and a \texttt{ktime\_get\_ns()} timestamp into
+% \texttt{g\_dirty\_ds} before re-establishing the mapping and replaying the
+% instruction.
+
+% At any point the user can call \texttt{dirty\_tracking\_query\_cutover} to
+% freeze the live table into \texttt{g\_dirty\_ds\_snapshot} and install a fresh
+% \texttt{g\_dirty\_ds}.
+% The user can then read \texttt{dirty\_tracking\_query\_dump} at their leisure to
+% obtain the frozen epoch's dirty set while live tracking continues uninterrupted.
+% The session ends with \texttt{dirty\_tracking\_stop}, which frees all state.
+
+
+

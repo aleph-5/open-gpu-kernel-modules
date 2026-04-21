@@ -93,6 +93,10 @@ extern NV_STATUS (*uvm_dirty_query_barrier_begin_fn)(void);
 extern NV_STATUS (*uvm_dirty_query_barrier_end_fn)(void);
 // END OF EDIT
 
+// EDIT BY VIDHI JAIN
+extern void (*uvm_dirty_restore_fn)(void);
+// END OF EDIT
+
 #if defined(CONFIG_PROC_FS) 
 struct proc_dir_entry;
 NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent);

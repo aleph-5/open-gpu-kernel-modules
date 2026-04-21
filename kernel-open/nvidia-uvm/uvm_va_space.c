@@ -3058,6 +3058,22 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
 
             if (!uvm_processor_mask_empty(&gpu_mask)) {
                 uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
+
+                // EDIT BY VIDHI JAIN
+                // Snapshot pte_bits[GPU_WRITE] and pte_bits[GPU_ATOMIC] before
+                // revoking so stop can restore exact pre-tracking permissions.
+                uvm_gpu_id_t gpu_id;
+                for_each_id_in_mask(gpu_id, &gpu_mask) {
+                    uvm_va_block_gpu_state_t *gpu_state = uvm_va_block_gpu_state_get(va_block, gpu_id);
+                    if (!gpu_state)
+                        continue;
+                    uvm_page_mask_copy(&gpu_state->dirty_downgraded_pages,
+                                       &gpu_state->pte_bits[UVM_PTE_BITS_GPU_WRITE]);
+                    uvm_page_mask_copy(&gpu_state->dirty_downgraded_atomic_pages,
+                                       &gpu_state->pte_bits[UVM_PTE_BITS_GPU_ATOMIC]);
+                }
+                // END OF EDIT
+
                 status = uvm_va_block_revoke_prot_mask(va_block, block_ctx, &gpu_mask, region, NULL, UVM_PROT_READ_WRITE);
                 if (status != NV_OK)
                     goto out;
@@ -3087,9 +3103,125 @@ out:
 // END OF EDIT
 // END OF EDIT
 
+// EDIT BY VIDHI JAIN (today)
+static void uvm_dirty_restore_all_permissions(void)
+{
+    pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_started();
+    uvm_va_space_t *va_space;
+    uvm_va_range_t *va_range;
+    uvm_va_block_t *va_block;
+    uvm_va_block_context_t *block_ctx;
 
-// Register the invalidation callback into uvm_common.
-// Must be called once at module init.
+    if (owner_tgid == -1)
+        return;
+
+    block_ctx = uvm_va_block_context_alloc(NULL);
+    if (!block_ctx)
+        return;
+
+    uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
+
+    list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
+        if (va_space->owner_tgid != owner_tgid)
+            continue;
+
+        uvm_va_space_down_read(va_space);
+
+        uvm_for_each_va_range(va_range, va_space) {
+            uvm_va_range_managed_t *managed;
+            uvm_processor_mask_t gpu_mask;
+
+            if (va_range->type != UVM_VA_RANGE_TYPE_MANAGED)
+                continue;
+
+            managed = uvm_va_range_to_managed(va_range);
+
+            for_each_va_block_in_va_range(managed, va_block) {
+                uvm_gpu_id_t gpu_id;
+
+                uvm_mutex_lock(&va_block->lock);
+
+                uvm_processor_mask_copy(&gpu_mask, &va_block->mapped);
+                uvm_processor_mask_clear(&gpu_mask, UVM_ID_CPU);
+
+                if (uvm_processor_mask_empty(&gpu_mask)) {
+                    uvm_mutex_unlock(&va_block->lock);
+                    continue;
+                }
+
+                uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
+
+                for_each_id_in_mask(gpu_id, &gpu_mask) {
+                    uvm_va_block_gpu_state_t *gpu_state =
+                        uvm_va_block_gpu_state_get(va_block, gpu_id);
+                    if (!gpu_state || uvm_page_mask_empty(&gpu_state->dirty_downgraded_pages))
+                        continue;
+
+                    uvm_processor_mask_t single_gpu;
+                    uvm_processor_mask_zero(&single_gpu);
+                    uvm_processor_mask_set(&single_gpu, gpu_id);
+
+                    // Restore atomic pages first, then write pages.
+                    // map_mask skips pages already at >= requested prot, so passing
+                    // the full write mask second is safe — atomic pages are skipped.
+                    if (!uvm_page_mask_empty(&gpu_state->dirty_downgraded_atomic_pages))
+                        uvm_va_block_map_mask(va_block, block_ctx, &single_gpu, region,
+                                             &gpu_state->dirty_downgraded_atomic_pages,
+                                             UVM_PROT_READ_WRITE_ATOMIC,
+                                             UvmEventMapRemoteCausePolicy);
+
+                    uvm_va_block_map_mask(va_block, block_ctx, &single_gpu, region,
+                                         &gpu_state->dirty_downgraded_pages,
+                                         UVM_PROT_READ_WRITE,
+                                         UvmEventMapRemoteCausePolicy);
+
+                    // EDIT BY VIDHI JAIN
+                    // Verify every restored page has the expected permission.
+                    // Must run after map_mask calls but before zeroing masks.
+                    uvm_page_index_t page_index;
+                    for_each_va_block_page_in_region_mask(page_index,
+                            &gpu_state->dirty_downgraded_pages, region) {
+                        bool expected_atomic = uvm_page_mask_test(
+                                &gpu_state->dirty_downgraded_atomic_pages, page_index);
+                        bool has_write  = uvm_page_mask_test(
+                                &gpu_state->pte_bits[UVM_PTE_BITS_GPU_WRITE], page_index);
+                        bool has_atomic = uvm_page_mask_test(
+                                &gpu_state->pte_bits[UVM_PTE_BITS_GPU_ATOMIC], page_index);
+                        NvU64 addr = va_block->start + (NvU64)page_index * PAGE_SIZE;
+
+                        if (expected_atomic && !has_atomic) {
+                            printk(KERN_ERR "uvm_dirty_restore BUG: gpu=%u "
+                                   "addr=0x%llx expected ATOMIC got "
+                                   "write=%d atomic=%d\n",
+                                   uvm_id_value(gpu_id), addr,
+                                   has_write, has_atomic);
+                        } else if (!expected_atomic && !has_write) {
+                            printk(KERN_ERR "uvm_dirty_restore BUG: gpu=%u "
+                                   "addr=0x%llx expected READ_WRITE got "
+                                   "write=%d atomic=%d\n",
+                                   uvm_id_value(gpu_id), addr,
+                                   has_write, has_atomic);
+                        }
+                    }
+                    // END OF EDIT
+
+                    uvm_page_mask_zero(&gpu_state->dirty_downgraded_pages);
+                    uvm_page_mask_zero(&gpu_state->dirty_downgraded_atomic_pages);
+                }
+
+                uvm_tracker_wait(&va_block->tracker);
+                uvm_mutex_unlock(&va_block->lock);
+            }
+        }
+
+        uvm_va_space_up_read(va_space);
+    }
+
+    uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+    uvm_va_block_context_free(block_ctx);
+}
+// END OF EDIT
+
 void uvm_va_space_dirty_init(void)
 {
     // uvm_dirty_invalidate_fn = uvm_dirty_invalidate_all_gpu_mappings;
@@ -3098,5 +3230,8 @@ void uvm_va_space_dirty_init(void)
     uvm_dirty_barrier_end_fn = uvm_dirty_barrier_end;
     uvm_dirty_query_barrier_begin_fn = uvm_dirty_query_barrier_begin;
     uvm_dirty_query_barrier_end_fn = uvm_dirty_query_barrier_end;
+    // EDIT BY VIDHI JAIN
+    uvm_dirty_restore_fn = uvm_dirty_restore_all_permissions;
+    // END OF EDIT
 }
 // END OF EDIT

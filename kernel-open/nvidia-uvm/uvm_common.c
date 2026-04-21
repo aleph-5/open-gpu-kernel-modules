@@ -43,6 +43,11 @@ NV_STATUS (*uvm_dirty_query_barrier_begin_fn)(void) = NULL;
 NV_STATUS (*uvm_dirty_query_barrier_end_fn)(void) = NULL;
 // END OF EDIT
 
+// EDIT BY VIDHI JAIN
+// called at stop to restore READ_WRITE or ATOMIC permission to pages we downgraded at start
+void (*uvm_dirty_restore_fn)(void) = NULL;
+// END OF EDIT
+
 // EDIT BY ADITI KHANDELIA
 // EDIT BY KUSHAGRA: replaced mutex with rwsem — hot-path ops (insert/lookup)
 // take the read side (concurrent), lifecycle ops (init/destroy) take the write side.
@@ -640,7 +645,23 @@ static ssize_t dirty_tracking_pause(struct file* file,
         return -ESRCH;
     }
 
+    if (!uvm_dirty_query_barrier_begin_fn || !uvm_dirty_query_barrier_end_fn) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EFAULT;
+    }
+    NV_STATUS status = uvm_dirty_query_barrier_begin_fn();
+    if (status != NV_OK) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -nv_status_to_errno(status);
+    }
+    
     WRITE_ONCE(g_uvm_dirty_tracking_active, false);
+
+    status = uvm_dirty_query_barrier_end_fn();
+    if (status != NV_OK) {
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -nv_status_to_errno(status);
+    }
 
     mutex_unlock(&uvm_dirty_lifecycle_lock);
     return count;
@@ -917,6 +938,10 @@ static ssize_t dirty_tracking_stop(struct file* file,
         mutex_unlock(&uvm_dirty_lifecycle_lock);
         return -ESRCH;
     }
+
+    // EDIT BY VIDHI JAIN
+    if (uvm_dirty_restore_fn) uvm_dirty_restore_fn();
+    // END OF EDIT
 
     uvm_dirty_page_table_destroy(false);
     uvm_dirty_ds_stats_flush();
