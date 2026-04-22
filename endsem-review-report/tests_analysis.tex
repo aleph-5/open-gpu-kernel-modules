@@ -1,1 +1,255 @@
 \section*{Testing and Analysis}
+
+The testing and analysis was done in two parts
+\begin{itemize}
+    \item \textbf{Correctness Testing}
+    \item \textbf{Performance Testing}
+\end{itemize}
+
+\subsection*{Correctness Testing}
+The correctness was evaluated using CUDA tests under \texttt{correctness\_tests}.
+The suites are intended to cover the following categories
+\begin{enumerate}
+
+    \item \textbf{\texttt{access\_type\_filtering}}
+          \\Tests that only writes (including atomic read-modify-write operations) are
+          recorded as dirty, while pure reads leave no trace.
+          Also verifies that prefetched pages are properly tracked and that distinct
+          access types to the same page are correctly de-duplicated.
+
+    \item \textbf{\texttt{address\_range\_filtering}}
+          \\Verifies that dirty tracking correctly isolates multiple non-contiguous
+          allocations, handles concurrent multi-threaded writes to distinct sub-ranges,
+          and produces page-aligned dump entries even when GPU accesses are at
+          sub-page granularity.
+          Also tests that inverted or zero-length range arguments do not suppress
+          entries, and that pages whose PTEs were established before \texttt{start\_track}
+          are still captured when written after tracking begins.
+
+    \item \textbf{\texttt{backend\_correctness}}
+          \\Validates fundamental invariants of the tracking system,
+          all dump entries must be page-aligned with no duplicates, sparse write
+          patterns must not produce phantom entries, and timestamps within and across
+          epochs must be non-decreasing.
+          Also verifies that freeing an allocation does not erase its tracking records,
+          a page allocated after tracking is still tracked, 
+          and that empty epochs between writes yield empty dumps.
+
+    \item \textbf{\texttt{cumulative\_mode}}
+          \\Confirms that cumulative mode accumulates pages across epochs (all pages
+          from prior windows remain visible in subsequent dumps) and that
+          re-writing an already-tracked page does not create a duplicate or update
+          its timestamp (first-write-wins semantics hold across epochs).
+          A stop/restart in delta mode is also verified to reset the tracking state
+          completely.
+
+    \item \textbf{\texttt{determinism}}
+          \\Tests the cutover border: pages written before cutover must appear
+          in the resulting snapshot while pages written after must not, even when the
+          two write phases are interleaved closely in time.
+          Also tests pause/resume semantics, verifying that writes issued during a
+          pause are not recorded and that tracking resumes cleanly after
+          \texttt{resume\_track}.
+
+    \item \textbf{\texttt{first\_write\_wins}}
+          \\Verifies the \textit{first write wins policy}, re-writing the same page must
+          not update its timestamp or produce a duplicate entry.
+          This is tested both for sequential re-writes and for 64 concurrent CUDA
+          streams racing to write the same page simultaneously.
+          Also confirms that after cutover (without PTE re-invalidation), a second
+          write to the same page does not re-appear in the next epoch.
+
+    \item \textbf{\texttt{footprint\_clearing}}
+          \\Checks that stopping tracking fully restores page permissions:
+          pages that were READ\_WRITE before tracking must be READ\_WRITE again,
+          and pages that had no prior GPU mapping
+          must not be spuriously granted READ\_WRITE on stop.
+          Since there is no user space API to verify this this is done via write latency.
+          Idempotency across multiple consecutive start/stop cycles is also verified.
+
+    \item \textbf{\texttt{lifecycle\_races}}
+          \\Stress-tests concurrent and destructive lifecycle transitions:
+          stop while a GPU kernel is writing, rapid start/stop cycling,
+          two processes attempting simultaneous tracking (second must get
+          \texttt{EBUSY}), owner process death (next process must recover cleanly),
+          \texttt{stop} while a dump is being read, \texttt{pause} with in-flight
+          faults, and \texttt{resume} correctly re-downgrading PTEs.
+
+    \item \textbf{\texttt{ordering}}
+          \\Validates temporal ordering guarantees, writes before \texttt{start\_track}
+          must not appear in the dump, timestamps must be monotonically
+          non-decreasing, queries in cumulative mode must be non-destructive, and
+          epoch isolation must hold.
+          Also tests concurrent CUDA streams and high-volume sentinel/flood write
+          patterns to verify timestamp ordering under load.
+
+    \item \textbf{\texttt{procfs\_robustness}}
+          \\Tests error handling on invalid procfs interactions: double \texttt{start},
+          \texttt{stop} without \texttt{start}, stopping with a wrong PID,
+          malformed input strings, double cutover without an intervening dump,
+          and cutover or dump without an active session.
+          All calls must return well-defined errors without crashing or corrupting
+          driver state.
+
+    \item \textbf{\texttt{scale}}
+          \\Exercises the backing data structure at scale, 100K page single epoch
+          writes, incremental growth across many cutover/dump cycles,
+          small chunk procfs reads of large dumps, and writes
+          near the maximum span of a bitmap based backend to catch off by one
+          or capacity errors.
+
+    \item \textbf{\texttt{snapshot\_isolation}}
+          \\Verifies snapshot atomicity, pages written after cutover must not
+          appear in the current snapshot, empty epochs must not carry over pages
+          from the previous epoch, concurrent inserts during a dump read must not
+          corrupt the snapshot, and a second read of an already drained delta mode
+          dump must return zero entries.
+
+    \item \textbf{\texttt{stats\_accuracy}}
+          \\Validates the diagnostic stats interface, the insert counter must
+          match the number of distinct pages written, counters must reset to zero
+          on stop/start, lock-wait counters must be non-negative, and stats
+          must be disabled (zeroed or unavailable) by default.
+
+    \item \textbf{\texttt{table\_lifecycle}}
+          \\Tests the dirty-tracking table through basic create/destroy cycles,
+          verifying that reinitialisation clears all entries, that stop/start
+          produces an empty table, that multiple reinit cycles are stable under
+          stress, and that two independent allocations tracked in one session
+          both appear correctly in the dump.
+
+    \item \textbf{\texttt{generic}}
+          \\A broad integration suite covering the core procfs interface
+          (\texttt{dirty\_tracking\_start/stop/query\_cutover/query\_dump}).
+          Validates that writes are tracked, reads are not, cutover atomically
+          snapshots the epoch, stop fully resets state, \texttt{cudaFree} does
+          not remove entries, and cumulative vs.\ delta mode behave as specified.
+          \\Although this adds no new functionality in addition to the other suites
+          This acts as a quick screening to check if the basic functionalities work.
+
+\end{enumerate}
+
+\paragraph{Observations}
+The tests were run as root, and the current implementation passed every test
+that is present in the repository.
+
+\begin{center}
+\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{4.5cm} >{\raggedright\arraybackslash}p{6.2cm} >{\raggedright\arraybackslash}p{1.0cm} >{\raggedright\arraybackslash}p{1.1cm}}
+\toprule
+Suite & Test & Purpose & Result & Time \\
+\midrule
+\endfirsthead
+\toprule
+Suite & Test & Purpose & Result & Time \\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+
+Table Lifecycle  & \texttt{tc01\_basic\_lifecycle} & Basic start→write→cutover→dump→stop cycle & PASS & 2.00s \\
+Table Lifecycle  & \texttt{tc02\_reinit\_clears\_entries}   & Reinit clears all tracked entries & PASS & 1.99s \\
+Table Lifecycle  & \texttt{tc03\_stop\_start\_empty\_table} & stop+start yields an empty table & PASS & 1.95s \\
+Table Lifecycle  & \texttt{tc04\_multi\_reinit\_stress} & Multiple reinit cycles are stable under stress & PASS & 2.01s \\
+Table Lifecycle  & \texttt{tc05\_two\_allocs\_one\_table} & Two allocations both appear in one session's dump & PASS & 1.95s \\
+\midrule
+
+Ordering & \texttt{tc01\_write\_before\_start} & Pre-start writes do not appear in any dump & PASS & 2.00s \\
+Ordering & \texttt{tc02\_ts\_monotonic} & Timestamps are monotonically non-decreasing & PASS & 2.01s \\
+Ordering & \texttt{tc03\_query\_nondestructive} & Cumulative dump reads are non-destructive & PASS & 2.00s \\
+Ordering & \texttt{tc04\_empty\_table\_active} & Active session with no writes returns empty dump & PASS & 2.00s \\
+Ordering & \texttt{tc05\_epoch\_isolation} & Each epoch's dump contains only that epoch's writes & PASS & 2.02s \\
+Ordering & \texttt{tc06\_concurrent\_streams} & Timestamps ordered correctly across concurrent streams & PASS & 1.99s \\
+Ordering & \texttt{tc07\_sentinel\_flood} & Sentinel page timestamp precedes 1M-thread flood & PASS & 1.95s \\
+Ordering & \texttt{tc08\_flood\_between\_queries} & Phase-A max timestamp $\leq$ phase-B min timestamp & PASS & 1.98s \\
+\midrule
+
+Determinism & \texttt{tc01\_cutover\_dump\_border} & Pre-cutover pages in snap1; post-cutover pages in snap2 & PASS & 1.99s \\
+Determinism & \texttt{tc02\_pause\_resume\_semantics} & Paused writes not recorded; resume re-arms tracking & PASS & 2.02s \\
+\midrule
+
+First Write Wins & \texttt{tc01\_same\_page\_repeat\_write} & Re-writing a page preserves original timestamp & PASS & 1.99s \\
+First Write Wins & \texttt{tc02\_concurrent\_same\_page} & 64 streams racing on one page produce exactly 1 entry & PASS & 2.00s \\
+First Write Wins & \texttt{tc03\_redirty\_after\_cutover} & Post-cutover re-write does not appear in next epoch & PASS & 2.02s \\
+\midrule
+
+Cumulative Mode & \texttt{tc01\_cumulative\_basic} & Epoch 2 dump contains all pages from both epochs & PASS & 2.03s \\
+Cumulative Mode & \texttt{tc02\_cumul\_vs\_delta\_consist.} & Each delta dump is a subset of the cumulative dump & PASS & 2.44s \\
+Cumulative Mode & \texttt{tc03\_cumul\_redirty\_idempotent} & Re-writing a tracked page produces no duplicate & PASS & 2.10s \\
+Cumulative Mode & \texttt{tc04\_cumul\_stop\_start\_accum.} & Stop+restart resets state completely in delta mode & PASS & 2.00s \\
+\midrule
+
+Addr.\ Range Filtering & \texttt{tc01\_two\_alloc\_range\_isolation} & Two allocations are isolated in a single session & PASS & 1.99s \\
+Addr.\ Range Filtering & \texttt{tc02\_range\_seq\_reads\_threaded} & Concurrent threaded writes to distinct sub-ranges & PASS & 2.03s \\
+Addr.\ Range Filtering & \texttt{tc03\_subpage\_start\_rounding} & Sub-page accesses produce page-aligned dump entries & PASS & 2.05s \\
+Addr.\ Range Filtering & \texttt{tc04\_inverted\_and\_zero\_range} & Inverted/zero-length range does not suppress entries & PASS & 2.06s \\
+Addr.\ Range Filtering & \texttt{tc05\_filter\_before\_start\_track} & Pages with pre-start PTEs still tracked when written & PASS & 2.07s \\
+\midrule
+
+Access Type Filtering & \texttt{tc01\_read\_only\_no\_dirty} & Read-only GPU access produces no dirty entries & PASS & 2.05s \\
+Access Type Filtering & \texttt{tc02\_atomic\_does\_dirty} & Atomic RMW records the page as dirty & PASS & 2.00s \\
+Access Type Filtering & \texttt{tc03\_read\_then\_write\_distinct} & Read half leaves no trace; write half is tracked & PASS & 2.00s \\
+Access Type Filtering & \texttt{tc04\_prefetch\_no\_dirty} & Prefetched pages are not recorded as dirty & PASS & 2.01s \\
+\midrule
+
+Snapshot Isolation & \texttt{tc01\_post\_cutover\_writes\_excl.} & Post-cutover writes excluded from current snapshot & PASS & 2.01s \\
+Snapshot Isolation & \texttt{tc02\_empty\_epoch\_no\_carryover} & Empty epoch yields no carryover from previous epoch & PASS & 2.07s \\
+Snapshot Isolation & \texttt{tc03\_conc.\_insert\_during\_dump} & Concurrent inserts do not corrupt snapshot being read & PASS & 2.17s \\
+Snapshot Isolation & \texttt{tc04\_multiple\_readers\_same\_snap.} & Second read of drained delta dump returns 0 entries & PASS & 2.02s \\
+\midrule
+
+Backend Correctness & \texttt{tc01\_all\_entries\_page\_aligned} & All dump entries are page-aligned, no duplicates & PASS & 2.03s \\
+Backend Correctness & \texttt{tc02\_sparse\_write\_pattern} & Sparse writes produce no phantom entries & PASS & 2.01s \\
+Backend Correctness & \texttt{tc03\_address\_monotonic\_in\_dump} & Reports whether dump output is address-monotonic & PASS & 1.96s \\
+Backend Correctness & \texttt{tc04\_multiple\_allocs\_independent} & Multiple allocations tracked independently, no aliasing & PASS & 2.03s \\
+Backend Correctness & \texttt{tc05\_invalidate\_doesnt\_clear} & \texttt{cudaFree} does not remove tracking entries & PASS & 2.01s \\
+Backend Correctness & \texttt{tc06\_ts\_monotonic\_within\_epoch} & Timestamps non-decreasing within a single epoch & PASS & 2.00s \\
+Backend Correctness & \texttt{tc07\_cross\_epoch\_ts\_ordering} & Max ts of epoch $N \leq$ min ts of epoch $N\!+\!1$ & PASS & 2.01s \\
+Backend Correctness & \texttt{tc08\_empty\_epoch\_between\_writes} & Empty epoch between writes yields empty dump & PASS & 2.02s \\
+Backend Correctness & \texttt{tc09\_alloc\_after\_start\_tracked} & Post-start allocation captured when written & PASS & 2.04s \\
+\midrule
+
+Procfs Robustness & \texttt{tc01\_double\_start} & Second \texttt{start} returns EBUSY; state intact & PASS & 2.03s \\
+Procfs Robustness & \texttt{tc02\_stop\_without\_start} & \texttt{stop} without prior start returns error & PASS & 2.00s \\
+Procfs Robustness & \texttt{tc03\_wrong\_pid\_stop} & Wrong-PID stop returns error; own session unaffected & PASS & 1.97s \\
+Procfs Robustness & \texttt{tc04\_malformed\_start\_write} & Malformed start strings return EINVAL & PASS & 1.99s \\
+Procfs Robustness & \texttt{tc05\_double\_cutover\_no\_dump} & Second cutover returns EBUSY; snapshot preserved & PASS & 1.99s \\
+Procfs Robustness & \texttt{tc06\_cutover\_without\_start} & Cutover/dump without active session return errors & PASS & 2.01s \\
+\midrule
+
+Lifecycle Races & \texttt{tc01\_stop\_while\_kernel\_running} & \texttt{stop} during active GPU write does not crash & PASS & 1.99s \\
+Lifecycle Races & \texttt{tc02\_rapid\_start\_stop\_cycle} & Rapid start/stop cycles leave no leaks or corruption & PASS & 2.00s \\
+Lifecycle Races & \texttt{tc03\_conc.\_start\_two\_processes} & Second process attempting start receives EBUSY & PASS & 1.95s \\
+Lifecycle Races & \texttt{tc04\_owner\_process\_dies} & New session works after owner process is killed & PASS & 2.04s \\
+Lifecycle Races & \texttt{tc05\_stop\_while\_dump\_reading} & \texttt{stop} during slow dump read does not deadlock & PASS & 3.05s \\
+Lifecycle Races & \texttt{tc06\_pause\_with\_inflight\_faults} & Pause stops recording; resume re-enables it & PASS & 1.99s \\
+Lifecycle Races & \texttt{tc07\_resume\_re\_downgrade} & Resume re-downgrades PTEs so writes are re-tracked & PASS & 2.01s \\
+\midrule
+
+Scale & \texttt{tc01\_large\_page\_count} & 100K pages tracked in one epoch without truncation & PASS & 2.29s \\
+Scale & \texttt{tc02\_repeated\_growth\_and\_query} & Incremental growth over many cutover/dump cycles & PASS & 2.04s \\
+Scale & \texttt{tc03\_procfs\_paginated\_read} & Small-chunk dump reads produce correct output & PASS & 2.01s \\
+Scale & \texttt{tc04\_near\_bitmap\_max} & Full-span write near bitmap backend capacity limit & PASS & 2.00s \\
+\midrule
+
+Stats Accuracy & \texttt{tc01\_insert\_count\_matches\_pages} & Insert counter equals number of distinct pages written & PASS & 2.02s \\
+Stats Accuracy & \texttt{tc02\_stats\_reset\_on\_reinit} & Stats counters reset to zero on stop+start & PASS & 2.01s \\
+Stats Accuracy & \texttt{tc03\_lock\_wait\_nonneg} & Lock-wait counter is non-negative after a session & PASS & 1.96s \\
+Stats Accuracy & \texttt{tc04\_stats\_disabled\_by\_default} & Stats disabled by default; toggle required & PASS & 1.97s \\
+\midrule
+
+Footprint Clearing & \texttt{tc01\_rw\_restored\_after\_stop} & Pre-tracking RW pages restored to RW after stop & PASS & 1.99s \\
+Footprint Clearing & \texttt{tc02\_fresh\_pages\_still\_fault} & Unmapped pages not spuriously granted RW on stop & PASS & 2.02s \\
+Footprint Clearing & \texttt{tc03\_idempotent\_cycles} & Multiple start/stop cycles each leave pages in RW state & PASS & 1.95s \\
+\midrule
+
+Generic & \texttt{test\_dirty\_tracking\_suite} & Integration smoke test covering all core behaviors & PASS & 2.02s \\
+
+\end{longtable}
+\normalsize
+\end{center}
+
+\paragraph{Interpretation}
