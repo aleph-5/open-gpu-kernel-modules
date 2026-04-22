@@ -38,7 +38,6 @@ def color(text, code):
 # Canonical suite order: roughly from foundational to advanced.
 SUITE_ORDER = [
     "table_lifecycle",
-    "late_alloc",
     "ordering",
     "determinism",
     "first_write_wins",
