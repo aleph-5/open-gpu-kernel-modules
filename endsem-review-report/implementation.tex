@@ -1,13 +1,189 @@
 \section*{Implementation}
 
 \subsection*{End-to-end Workflow}
+\begin{figure}[H]
+\centering
+\resizebox{1.08\linewidth}{!}{%
+\begin{tikzpicture}[
+    node distance=9mm and 10mm,
+    box/.style={rectangle, rounded corners, draw=black, thick, align=center, text width=32mm, minimum height=8mm, fill=blue!12},
+    readbox/.style={box, fill=blue!12},
+    writebox/.style={box, fill=green!18},
+    procfs/.style={box, fill=purple!30},
+    decision/.style={diamond, draw=black, thick, fill=green!18, aspect=2.0, align=center, inner sep=1.3pt, text width=20mm},
+    flow/.style={-Latex, thick, shorten >=1.5pt, shorten <=1.5pt}
+]
 
-\subsection*{Modified Driver Files}
+\node[procfs] (start) {{\scriptsize\texttt{dirty\_tracking\_start}}};
+\node[box, below=of start] (downgrade) {Active tracking page table initalized. Cumulative tracking page table initialized. Downgrade mapped GPU pages to \texttt{READ\_ONLY}\\and snapshot pre-tracking permission masks};
+\node[box, below=of downgrade] (active) {Tracking active};
+
+\node[procfs, left=36mm of active] (pausecmd) {{\scriptsize\texttt{dirty\_tracking\_pause}}};
+\node[box, below=of pausecmd] (paused) {Tracking paused\\(\texttt{active=false})};
+\node[procfs, below=of paused] (resume) {{\scriptsize\texttt{dirty\_tracking\_resume}}};
+
+\node[procfs, below=20mm of active] (cutover) {{\scriptsize\texttt{dirty\_tracking\_query\_}}\\[-1pt]{\scriptsize\texttt{cutover}}};
+\node[box, below=of cutover] (snapshot) {Snapshot pending\\(live table swapped out)};
+\node[procfs, below=of snapshot] (dump) {{\scriptsize\texttt{dirty\_tracking\_query\_}}\\[-1pt]{\scriptsize\texttt{dump}}};
+
+\node[decision, right=70mm of active] (access) {GPU\\fault?};
+\node[readbox, below left=10mm and 10mm of access] (readpath) {Read fault path\\Map/retain \texttt{READ\_ONLY}\\No dirty insert};
+\node[writebox, below right=10mm and 10mm of access] (writepath) {Write/atomic fault path\\ Map writable permissions \texttt{READ\_WRITE} or \texttt{READ\_WRITE\_ATOMIC}\\Insert page + timestamp};
+
+\node[decision, left=70mm of paused] (pausedaccess) {GPU\\fault?};
+\node[readbox, below left=10mm and 10mm of pausedaccess] (pausedreadpath) {Read fault path\\Map/retain \texttt{READ\_ONLY}\\No dirty insert while paused};
+\node[writebox, below right=10mm and 10mm of pausedaccess] (pausedwritepath) {Write/atomic fault path\\Map writable permissions\\\texttt{READ\_WRITE} or \texttt{READ\_WRITE\_ATOMIC}\\No dirty insert while paused};
+
+\node[procfs, right=36mm of dump] (stop) {{\scriptsize\texttt{dirty\_tracking\_stop}}};
+\node[box, below=of stop] (restore) {Restore saved \texttt{READ\_WRITE}/\texttt{ATOMIC}\\permissions and destroy session state};
+
+\draw[flow] (start) -- (downgrade);
+\draw[flow] (downgrade) -- (active);
+
+\draw[flow] (active.west) -- (pausecmd.east);
+\draw[flow] (pausecmd) -- (paused);
+\draw[flow] (paused) -- (resume);
+\draw[flow] (resume.east) to[out=0,in=220] ([xshift=-2mm]downgrade.west);
+
+\draw[flow] (active.south west) to[out=-110,in=110]
+    node[pos=0.5, right=1mm, align=center] {\scriptsize \texttt{snapshot\_pending == false}\\\scriptsize{for cutover}}
+    (cutover.north west);
+\draw[flow] (cutover.north east) to[out=70,in=-70] (active.south east);
+\draw[flow] (cutover) -- (snapshot);
+\draw[flow] (snapshot) -- (dump);
+\draw[flow] (dump.west) to[out=180,in=-110] (cutover.west);
+
+\draw[flow] (active.east) -- (access.west);
+\draw[flow] (access.south west) to[out=240,in=50] node[above left, pos=0.45] {\scriptsize read} (readpath.north);
+\draw[flow] (access.south east) to[out=300,in=130] node[above right, pos=0.45] {\scriptsize write/atomic} (writepath.north);
+\draw[flow] (readpath.north west) to[out=135,in=-45] (active.east);
+\draw[flow] (writepath.north east) to[out=45,in=45] (active.north east);
+
+\draw[flow] (paused.west) -- (pausedaccess.east);
+\draw[flow] (pausedaccess.south west) to[out=240,in=50] node[above left, pos=0.45] {\scriptsize read} (pausedreadpath.north);
+\draw[flow] (pausedaccess.south east) to[out=300,in=130] node[above right, pos=0.45] {\scriptsize write/atomic} (pausedwritepath.north);
+\draw[flow] (pausedreadpath.north west) to[out=45,in=150] (paused.west);
+\draw[flow] (pausedwritepath.north east) to[out=135,in=-135] (paused.south west);
+
+\draw[flow] (active.east) to[out=0,in=180] (stop.west);
+\draw[flow] (stop) -- (restore);
+
+\end{tikzpicture}
+}
+\caption{End-to-end workflow of the dirty page tracking system, illustrating procfs control paths, GPU fault handling, and state transitions.}
+\label{fig:permission-lifecycle-flow}
+\end{figure}
+\subsubsection*{State Machine}
+Dirty tracking is modelled as a single-owner lifecycle state machine, with
+all lifecycle operations serialized by
+\texttt{uvm\_dirty\_lifecycle\_lock} and guarded by owner-PID checks.
+The states are:
+\begin{enumerate}
+    \item \textbf{Tracking stopped.}
+          \texttt{started=false}, \texttt{active=false},
+          \texttt{snapshot\_pending=false}.
+    \item \textbf{Tracking active with snapshot.}
+          \texttt{started=true}, \texttt{active=true},
+          \texttt{snapshot\_pending=true}.
+    \item \textbf{Tracking active without snapshot.}
+          \texttt{started=true}, \texttt{active=true},
+          \texttt{snapshot\_pending=false}.
+    \item \textbf{Tracking paused with snapshot.}
+          \texttt{started=true}, \texttt{active=false},
+          \texttt{snapshot\_pending=true}.
+    \item \textbf{Tracking paused without snapshot.}
+          \texttt{started=true}, \texttt{active=false},
+          \texttt{snapshot\_pending=false}.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\resizebox{0.98\linewidth}{!}{%
+\begin{tikzpicture}[
+    st/.style={rectangle, rounded corners, draw=black, thick, align=center, text width=35mm, minimum height=6mm, fill=blue!10},
+    tr/.style={-Latex, thick}
+]
+\node[st] (stopped) at (0mm,22mm) {\small{Tracking stopped}\\{\scriptsize \texttt{started=false}}};
+\node[st] (active_no) at (-46mm,4mm) {\small{Tracking active\\without snapshot}\\{\scriptsize \texttt{started=true, active=true}}\\{\scriptsize \texttt{snapshot\_pending=false}}};
+\node[st] (active_yes) at (46mm,4mm) {\small{Tracking active\\with snapshot}\\{\scriptsize \texttt{started=true, active=true}}\\{\scriptsize \texttt{snapshot\_pending=true}}};
+\node[st] (paused_no) at (-46mm,-20mm) {\small{Tracking paused\\without snapshot}\\{\scriptsize \texttt{started=true, active=false}}\\{\scriptsize \texttt{snapshot\_pending=false}}};
+\node[st] (paused_yes) at (46mm,-20mm) {\small{Tracking paused\\with snapshot}\\{\scriptsize \texttt{started=true, active=false}}\\{\scriptsize \texttt{snapshot\_pending=true}}};
+
+\draw[tr] (stopped.west) to[out=225,in=10] node[left, pos=0.50] {\scriptsize \texttt{start}} (active_no.north);
+
+\draw[tr] (active_no.east) to[bend left=16] node[above] {\scriptsize \texttt{query\_cutover}} (active_yes.west);
+\draw[tr] (active_yes.west) to[bend left=16] node[below] {\scriptsize \texttt{query\_dump}} (active_no.east);
+\draw[tr] (paused_no.east) to[bend left=16] node[above] {\scriptsize \texttt{query\_cutover}} (paused_yes.west);
+\draw[tr] (paused_yes.west) to[bend left=16] node[below] {\scriptsize \texttt{query\_dump}} (paused_no.east);
+
+\draw[tr] (active_no.south) to[bend left=12] node[left] {\scriptsize \texttt{pause}} (paused_no.north);
+\draw[tr] (paused_no.north) to[bend left=12] node[right] {\scriptsize \texttt{resume}} (active_no.south);
+\draw[tr] (active_yes.south) to[bend right=12] node[right] {\scriptsize \texttt{pause}} (paused_yes.north);
+\draw[tr] (paused_yes.north) to[bend right=12] node[left] {\scriptsize \texttt{resume}} (active_yes.south);
+
+\draw[tr] (active_no.north) to[bend left=16] node[left, pos=0.55] {\scriptsize \texttt{stop}} (stopped.west);
+\draw[tr] (active_yes.north) to[bend right=16] node[right, pos=0.55] {\scriptsize \texttt{stop}} (stopped.east);
+\draw[tr] (paused_no.north west) to[out=150,in=150] node[left, pos=0.38] {\scriptsize \texttt{stop}} (stopped.north west);
+\draw[tr] (paused_yes.north east) to[out=30,in=30] node[right, pos=0.38] {\scriptsize \texttt{stop}} (stopped.north east);
+\end{tikzpicture}
+}
+\caption{State-transition diagram for dirty-tracking lifecycle states.}
+\label{fig:dirty-tracking-state-machine}
+\end{figure}
+
+Transitions that violate owner checks, state preconditions, or snapshot guards
+are rejected by the procfs handlers.
+
+\subsubsection*{Permission Lifecycle}
+Figure~\ref{fig:permission-lifecycle-flow} captures the permission policy used
+to turn hardware write access into explicit software-recorded dirty events.
+
+\paragraph{Start/Resume phase}
+At \texttt{start} (and again at \texttt{resume}), the implementation walks the
+owner VA space and revokes GPU write-class permissions from mapped pages,
+forcing tracked mappings to \texttt{READ\_ONLY}. Before revocation, per-page
+write/atomic masks are snapshot so \texttt{stop} can restore exact
+pre-tracking permissions.
+
+\paragraph{Active tracking phase}
+During replayable fault servicing:
+\begin{enumerate}
+    \item Read faults remain mapped as \texttt{READ\_ONLY} and are not inserted
+          into the dirty set.
+    \item Write/atomic faults are serviced with writable permissions
+          (\texttt{READ\_WRITE} or \texttt{READ\_WRITE\_ATOMIC}), and the page
+          number plus timestamp are inserted into the live dirty table.
+\end{enumerate}
+This enforces first-write capture while preserving normal execution after fault
+resolution.
+
+\paragraph{Paused phase}
+When paused, dirty recording is disabled, but fault handling still progresses:
+read paths remain \texttt{READ\_ONLY}, while write/atomic paths may regain
+writable permissions for correctness and forward progress. Because
+\texttt{active=false}, no dirty inserts are emitted in this interval.
+
+\paragraph{Cutover/Dump phase}
+\texttt{query\_cutover} requires \texttt{snapshot\_pending==false}. Under the
+query barrier, it swaps out the live table into a frozen snapshot and installs
+a new live table so recording can continue. \texttt{query\_dump} then consumes
+that frozen snapshot: in \texttt{delta} mode it emits snapshot contents
+directly; in \texttt{cumulative} mode it merges snapshot entries into the
+cumulative table before output.
+
+\paragraph{Stop phase}
+\texttt{stop} restores the previously captured per-page write/atomic permission
+masks and tears down live, snapshot, and cumulative tracking state, returning
+the system to its pre-tracking permission configuration.
+
+
+\subsubsection*{Modified Driver Files}
 All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}.
 The files containing functionality added or significantly modified by us are:
 
 \begin{enumerate}
-    \item \texttt{uvm\_common.h} / \texttt{uvm\_common.c} - The primary implementation file.
+    \item \textbf{\texttt{uvm\_common.h} / \texttt{uvm\_common.c }}\\
+          The primary implementation file.
           Defines \texttt{struct dirty\_page\_info} (page number, timestamp) and the three
           global dirty-set tables (\texttt{g\_dirty\_ds}, \texttt{g\_dirty\_ds\_snapshot},
           \texttt{g\_dirty\_ds\_cumulative}).
@@ -21,40 +197,50 @@ The files containing functionality added or significantly modified by us are:
           \texttt{uvm\_dirty\_activate\_now\_fn}, \texttt{uvm\_dirty\_barrier\_end\_fn},
           \texttt{uvm\_dirty\_query\_barrier\_begin\_fn},
           \texttt{uvm\_dirty\_query\_barrier\_end\_fn}) that are registered from
-          \texttt{uvm\_va\_space.c} at module init.
+          \texttt{uvm\_va\_space.c} at module init.\\
 
-    \item \texttt{uvm\_dirty\_ds.h} - Defines the \texttt{uvm\_dirty\_ds\_ops} interface
+    \item \textbf{\texttt{uvm\_dirty\_ds.h}}\\
+            Defines the \texttt{uvm\_dirty\_ds\_ops} interface
           (init, insert, lookup, for\_each\_in\_range, destroy), the \texttt{uvm\_dirty\_ds}
           struct holding ops pointer, backend-private data, and statistics, and inline timing
-          wrappers for all operations.
+          wrappers for all operations.\\
 
-    \item \texttt{uvm\_dirty\_ds\_xarray.c} - xarray backend using atomic
-          \texttt{xa\_cmpxchg} for first-write-wins insert.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_xarray.c}}\\
+          xarray backend using atomic
+          \texttt{xa\_cmpxchg} for first-write-wins insert.\\
 
-    \item \texttt{uvm\_dirty\_ds\_vector.c} - Sorted dynamic array backend with
-          binary-search insert and lookup.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_vector.c}}\\
+          Sorted dynamic array backend with
+          binary-search insert and lookup.\\
 
-    \item \texttt{uvm\_dirty\_ds\_vector\_unsorted.c} - Unsorted append-order vector
-          with spinlock, preserving fault-arrival order.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_vector\_unsorted.c}}\\
+          Unsorted append-order vector
+          with spinlock, preserving fault-arrival order.\\
 
-    \item \texttt{uvm\_dirty\_ds\_linked\_list.c} - Singly-linked list with sentinel node.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_linked\_list.c}}\\
+          Singly-linked list with sentinel node.\\
 
-    \item \texttt{uvm\_dirty\_ds\_bitmap.c} - Flat bit array covering $2^{38}$ pages
+    \item \textbf{\texttt{uvm\_dirty\_ds\_bitmap.c}}\\
+          Flat bit array covering $2^{38}$ pages
           (32\,MB fixed allocation); O(1) operations; timestamps not stored.
 
-    \item \texttt{uvm\_dirty\_ds\_nested\_bitmap.c} - Two-level hierarchical bitmap
-          for sparse page sets.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_nested\_bitmap.c}}\\
+          Two-level hierarchical bitmap
+          for sparse page sets.\\
 
-    \item \texttt{uvm\_dirty\_ds\_chunked.c} - Chunked vector with a background
-          kthread sorter for deferred ordering.
+    \item \textbf{\texttt{uvm\_dirty\_ds\_chunked.c}}\\
+          Chunked vector with a background
+          kthread sorter for deferred ordering.\\
 
-    \item \texttt{uvm\_gpu\_replayable\_faults.c} - The write-fault hook.
+    \item \textbf{\texttt{uvm\_gpu\_replayable\_faults.c}}\\
+          The write-fault hook.
           After standard fault servicing, checks \texttt{uvm\_dirty\_tracking\_active()}
           and \texttt{service\_access\_type >= UVM\_FAULT\_ACCESS\_TYPE\_WRITE}, then
           calls \texttt{uvm\_dirty\_page\_table\_record} with the faulting page number
-          and \texttt{ktime\_get\_ns()} timestamp.
+          and \texttt{ktime\_get\_ns()} timestamp.\\
 
-    \item \texttt{uvm\_va\_space.c} - Implements the barrier infrastructure.
+    \item \textbf{\texttt{uvm\_va\_space.c}}\\
+          Implements the barrier infrastructure.
           \texttt{uvm\_dirty\_downgrade\_all\_permissions} walks all va-ranges and
           va-blocks for the owner's va\_space, calling
           \texttt{uvm\_va\_block\_revoke\_prot\_mask} with \texttt{UVM\_PROT\_READ\_WRITE}
@@ -65,19 +251,48 @@ The files containing functionality added or significantly modified by us are:
           locking all parent GPU replayable-fault ISRs and spinning until the fault
           buffer is empty.
           \texttt{uvm\_va\_space\_dirty\_init} registers all five function pointers
-          at module init.
+          at module init.\\
 
-    \item \texttt{uvm\_va\_block.c} - \texttt{compute\_new\_permission} modified to
+    \item \textbf{\texttt{uvm\_va\_space.h}}\\
+          Declares \texttt{uvm\_va\_space\_dirty\_init},
+          the registration hook invoked during module initialisation.\\
+
+    \item \textbf{\texttt{uvm\_va\_block.c}}\\
+          \texttt{compute\_new\_permission} modified to
           force \texttt{READ\_ONLY} on read faults when tracking is active for the
           faulting va\_space's owner, preventing read faults from obtaining write
-          mappings that would bypass recording.
+          mappings that would bypass recording.\\
 
-    \item \texttt{uvm\_migrate.c} - \texttt{block\_migrate\_map\_unmapped\_pages}
+    \item \textbf{\texttt{uvm\_migrate.c}}\\
+          \texttt{block\_migrate\_map\_unmapped\_pages}
           modified to map GPU-migrated pages as \texttt{READ\_ONLY} when tracking is
-          active, closing the \texttt{cudaMemPrefetchAsync} bypass.
+          active, closing the \texttt{cudaMemPrefetchAsync} bypass.\\
 
-    \item \texttt{uvm.c} - Top-level integration; calls \texttt{uvm\_dirty\_procfs\_init}
-          and \texttt{uvm\_va\_space\_dirty\_init} during module initialisation.
+    \item \textbf{\texttt{uvm\_va\_block.h}}\\
+          Extends per-GPU va-block state with
+          \texttt{dirty\_downgraded\_pages} and
+          \texttt{dirty\_downgraded\_atomic\_pages} masks used to restore exact
+          pre-tracking permissions at stop.\\
+
+    \item \textbf{\texttt{uvm\_procfs.c}}\\
+          Integrates the dirty-tracking \texttt{procfs}
+          interface into \texttt{/proc/driver/nvidia-uvm/} by invoking
+          \texttt{uvm\_dirty\_procfs\_init(uvm\_proc\_dir)} during procfs setup.\\
+
+    \item \textbf{\texttt{nvidia-uvm-sources.Kbuild}}\\
+          Adds all dirty data-structure backend
+          source files (\texttt{uvm\_dirty\_ds\_xarray.c},
+          \texttt{uvm\_dirty\_ds\_bitmap.c},
+          \texttt{uvm\_dirty\_ds\_vector.c},
+          \texttt{uvm\_dirty\_ds\_vector\_unsorted.c},
+          \texttt{uvm\_dirty\_ds\_chunked.c},
+          \texttt{uvm\_dirty\_ds\_nested\_bitmap.c},
+          \texttt{uvm\_dirty\_ds\_linked\_list.c}) to the module build list.\\
+
+    \item \textbf{\texttt{uvm.c}}\\
+          Top-level integration; calls
+          \texttt{uvm\_va\_space\_dirty\_init} during module initialisation so
+          callback pointers are registered before tracking control paths execute.
 \end{enumerate}
 
 \subsection*{Procfs Interface}
@@ -85,73 +300,95 @@ The files containing functionality added or significantly modified by us are:
 Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
 
 \begin{enumerate}
-    \item \texttt{dirty\_tracking\_start} (write) -
-          Input \texttt{"<pid> <delta|cumulative>"}.
-          Initialises the live table, downgrades all GPU write permissions, and
-          sets \texttt{active = true}.
+    \item \textbf{\texttt{dirty\_tracking\_start} (write)} \\ 
+          Input: \texttt{"<pid> <delta|cumulative>"}\\
+          Initializes a fresh live table for the target PID, selects query mode
+          (\texttt{delta} or \texttt{cumulative}), executes permission downgrade
+          over the owner's managed GPU mappings, and finally enables recording.\\
+          The request is rejected if tracking is already started, if the input
+          format is invalid, or if initialization/callback setup fails.\\
 
-    \item \texttt{dirty\_tracking\_stop} (write) -
-          Input \texttt{"<pid>"}.
-          Destroys all tracking state (live, snapshot, cumulative tables) and
-          flushes accumulated statistics to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
+    \item \textbf{\texttt{dirty\_tracking\_stop} (write)} \\ 
+          Input: \texttt{"<pid>"}\\
+          Restores previously downgraded GPU page permissions, destroys all
+          tracking state (live/snapshot/cumulative), clears snapshot-pending
+          state, and flushes accumulated DS statistics to
+          \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.\\
+          The request is rejected if the supplied PID is not the active owner.\\
 
-    \item \texttt{dirty\_tracking\_pause} (write) -
-          Input \texttt{"<pid>"}.
-          Soft gate flip: sets \texttt{active = false}.
-          In-flight fault handlers may still complete a record insertion.
+    \item \textbf{\texttt{dirty\_tracking\_pause} (write)} \\ 
+          Input: \texttt{"<pid>"}\\
+          Establishes the query barrier, sets \texttt{active=false}, and then
+          releases the barrier. This ensures pause is synchronized with
+          replayable-fault ISR state.\\
+          The request is rejected if the PID does not match the active owner or
+          if tracking is not currently active.\\
 
-    \item \texttt{dirty\_tracking\_resume} (write) -
-          Input \texttt{"<pid>"}.
-          Re-runs the full downgrade and activation sequence, re-establishing the
-          deterministic write-fault frontier.
+    \item \textbf{\texttt{dirty\_tracking\_resume} (write)} \\ 
+          Input: \texttt{"<pid>"}\\
+          Re-executes the same downgrade/activate/barrier-end sequence used by
+          \texttt{start}, re-establishing deterministic write-fault capture
+          after a paused interval.\\
 
-    \item \texttt{dirty\_tracking\_query\_cutover} (write) -
-          Input \texttt{"<pid>"}.
-          Acquires the query barrier, atomically swaps live table to snapshot and
-          installs a fresh live table, increments \texttt{g\_dirty\_epoch}, sets
-          \texttt{g\_snapshot\_pending = true}, releases barrier.
-          Returns \texttt{EBUSY} if a snapshot is already pending.
+    \item \textbf{\texttt{dirty\_tracking\_query\_cutover} (write)} \\ 
+          Input: \texttt{"<pid>"}\\
+          Acquires the query barrier, atomically swaps
+          \texttt{live $\rightarrow$ snapshot} under write lock, installs a
+          fresh live table, updates epoch metadata, sets
+          \texttt{g\_snapshot\_pending=true}, and releases the barrier.\\
+          The request is rejected if the previous snapshot has not yet been
+          consumed by \texttt{query\_dump}.\\
 
-    \item \texttt{dirty\_tracking\_query\_dump} (read) -
-          Requires \texttt{g\_snapshot\_pending = true}.
-          In \texttt{delta} mode emits the snapshot pages and destroys it.
-          In \texttt{cumulative} mode merges snapshot into
-          \texttt{g\_dirty\_ds\_cumulative} (first-write-wins) then emits the
-          cumulative union.
-          Output format: one line per page, \texttt{0x\textit{addr}\ \textit{timestamp\_ns}}.
+    \item \textbf{\texttt{dirty\_tracking\_query\_dump} (read)} \\ 
+          No input payload (read endpoint). Requires
+          \texttt{g\_snapshot\_pending=true}.\\
+          In \texttt{delta} mode, emits only the current frozen snapshot.
+          In \texttt{cumulative} mode, first merges snapshot contents into
+          \texttt{g\_dirty\_ds\_cumulative} (first-write-wins), then emits the
+          cumulative union.\\
+          Output includes a header line followed by one line per page:
+          \texttt{0x\textit{addr}\ \textit{timestamp\_ns}}.\\
+          Snapshot consumption is overflow-safe: when \texttt{seq\_file}
+          overflows, snapshot state is retained and replayed on the next read.\\
 
-    \item \texttt{dirty\_ds\_stats\_toggle} (write) -
-          Input \texttt{"enable"} or \texttt{"disable"}.
-          Enabling resets all counters for a clean measurement window.
+    \item \textbf{\texttt{dirty\_ds\_stats\_toggle} (write)} \\ 
+          Input: \texttt{"enable"} or \texttt{"disable"}\\
+          Enables or disables instrumentation for DS and callback timing
+          counters. Writing \texttt{enable} also resets all counters/timers to
+          zero to provide a clean measurement window.\\
 
-    \item \texttt{dirty\_ds\_stats} (read) -
-          Emits per-operation counts and total nanoseconds for init, insert,
-          lookup, for-each, destroy, insert lock-wait, lookup lock-wait, and the
-          three callback operations (invalidate, activate, barrier-end).
+    \item \textbf{\texttt{dirty\_ds\_stats} (read)} \\ 
+          Read-only statistics snapshot for the current session.\\
+          Reports operation counts and average latency for
+          init/insert/lookup/for-each/destroy, average lock-wait components,
+          and callback timing for invalidate, activate-now, and barrier-end.
 \end{enumerate}
 
 \subsection*{Design Choices}
 \subsubsection*{Determinism Guarantees}
+
+
 \subsubsection*{Data Structures}
-\paragraph{Global state}
-Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
-\begin{enumerate}
-    \item \texttt{g\_dirty\_ds} - live table; fault handler inserts here.
-    \item \texttt{g\_dirty\_ds\_snapshot} - frozen copy created by cutover;
-          exists only between a cutover and the subsequent dump.
-    \item \texttt{g\_dirty\_ds\_cumulative} - session-union table used in
-          cumulative mode; merge-accumulates snapshot contents at each dump.
-\end{enumerate}
+      \paragraph{Global state}
+      Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
+      \begin{enumerate}
+            \item \texttt{g\_dirty\_ds} - live table; fault handler inserts here.
+            \item \texttt{g\_dirty\_ds\_snapshot} - frozen copy created by cutover;
+                  exists only between a cutover and the subsequent dump.
+            \item \texttt{g\_dirty\_ds\_cumulative} - session-union table used in
+                  cumulative mode; merge-accumulates snapshot contents at each dump.
+      \end{enumerate}
 
-\paragraph{Backend abstraction}
-All three tables share the \texttt{uvm\_dirty\_ds\_ops} interface
-(\texttt{uvm\_dirty\_ds.h}), which provides init, insert, lookup,
-for\_each\_in\_range, and destroy.
-Inline wrappers measure operation latency when statistics are enabled.
-The active backend is selected at compile time by setting the \texttt{.ops}
-pointer in the static \texttt{g\_dirty\_ds} initialiser.
+      \paragraph{Backend abstraction}
+      All three tables share the \texttt{uvm\_dirty\_ds\_ops} interface
+      (\texttt{uvm\_dirty\_ds.h}), which provides init, insert, lookup,
+      for\_each\_in\_range, and destroy.
+      Inline wrappers measure operation latency when statistics are enabled.
+      The active backend is selected at compile time by setting the \texttt{.ops}
+      pointer in the static \texttt{g\_dirty\_ds} initialiser.
 
-\subsubsection*{Locking}
+
+\subsubsection*{Concurrency Design}
 A read-write semaphore (\texttt{uvm\_dirty\_ds\_rwsem}) protects all three
 tables.
 Fault-handler insertions and lookups take the read side concurrently.
@@ -159,42 +396,3 @@ Lifecycle operations (init, destroy, cutover swap) take the write side
 exclusively, blocking new insertions only during the brief pointer swap.
 A separate mutex (\texttt{uvm\_dirty\_lifecycle\_lock}) serialises the procfs
 lifecycle handlers (start, stop, pause, resume, cutover) against each other.
-
-
-
-% \subsection*{Design Overview}
-
-% The tracker exploits the GPU's replayable fault path.
-% Because UVM manages GPU memory demand-paging, every GPU access to an unmapped
-% or insufficiently-
-
-
-
-% permissioned page generates a replayable fault that is
-% serviced by the driver.
-% The tracker \emph{downgrades} GPU write
-% permissions at epoch start so that subsequent GPU writes generate faults.
-% The fault hook records the page, then restores write permission and replays
-% the instruction.
-% Read accesses are unaffected and do not generate faults.
-
-% \paragraph{Workflow}
-% A tracking session begins when the user writes to
-% \texttt{dirty\_tracking\_start}.
-% This initialises a fresh live table (\texttt{g\_dirty\_ds}) for the specified
-% process, walks all GPU page-table entries in the owner's va\_space and
-% strips write permission from each, then sets the global active flag.
-% Each GPU write fault is intercepted in the replayable fault-servicing path,
-% which records the faulting page and a \texttt{ktime\_get\_ns()} timestamp into
-% \texttt{g\_dirty\_ds} before re-establishing the mapping and replaying the
-% instruction.
-
-% At any point the user can call \texttt{dirty\_tracking\_query\_cutover} to
-% freeze the live table into \texttt{g\_dirty\_ds\_snapshot} and install a fresh
-% \texttt{g\_dirty\_ds}.
-% The user can then read \texttt{dirty\_tracking\_query\_dump} at their leisure to
-% obtain the frozen epoch's dirty set while live tracking continues uninterrupted.
-% The session ends with \texttt{dirty\_tracking\_stop}, which frees all state.
-
-
-

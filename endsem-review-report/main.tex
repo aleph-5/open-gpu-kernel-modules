@@ -12,6 +12,22 @@
 \usepackage{microtype}
 \usepackage{float}
 \usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric}
+\makeatletter
+\renewcommand{\section}{%
+  \@startsection{section}{1}{\z@}%
+                {-2.0ex \@plus -0.5ex \@minus -0.2ex}%
+                { 1.5ex \@plus  0.3ex \@minus  0.2ex}%
+                {\fontsize{15}{18}\selectfont\bfseries\raggedright}%
+}
+\renewcommand{\subsection}{%
+  \@startsection{subsection}{2}{\z@}%
+                {-1.8ex \@plus -0.5ex \@minus -0.2ex}%
+                { 0.8ex \@plus  0.2ex}%
+                {\fontsize{13}{15}\selectfont\bfseries\raggedright}%
+}
+\makeatother
 
 \title{CS614 - Endsem Project Review}
 \author{Aditi Khandelia \And Arush Upadhyaya \And Kushagra Srivastava \And Sankalp Mittal \And Vidhi Jain}
@@ -30,4 +46,3 @@
 \input{declaration}
 
 \end{document}
-
