@@ -1,1 +1,135 @@
 \section*{Instructions for Run}
+
+This section gives step-by-step commands to build the module, exercise every
+procfs control path, and run the correctness and performance test suites.
+
+\subsection*{Prerequisites}
+
+All operations require root. Verify the NVIDIA driver and CUDA toolkit are present:
+
+\begin{verbatim}
+nvidia-smi
+nvcc --version
+\end{verbatim}
+
+\subsection*{Build and Load the Module}
+
+\begin{verbatim}
+sudo make modules -j$(nproc)       # compile all kernel modules
+sudo make modules_install -j$(nproc) # install .ko files
+sudo modprobe -r nvidia_uvm        # unload old nvidia_uvm
+sudo modprobe nvidia_uvm           # load modified nvidia_uvm
+\end{verbatim}
+
+Verify the procfs entries are present:
+
+\begin{verbatim}
+ls /proc/driver/nvidia-uvm/dirty_*
+\end{verbatim}
+
+\subsection*{Exercising the Procfs Interface}
+
+Replace \texttt{<PID>} with the TGID of the CUDA process under observation.
+
+\subsubsection*{Lifecycle Controls}
+
+\begin{verbatim}
+# Initialise live table, downgrade GPU PTEs to READ_ONLY, begin recording.
+echo "<PID> delta" > /proc/driver/nvidia-uvm/dirty_tracking_start
+
+# Same as above but merges every snapshot into a session-union table on dump.
+echo "<PID> cumulative" > /proc/driver/nvidia-uvm/dirty_tracking_start
+
+# Drain in-flight faults, then disable recording (tables and PTEs preserved).
+echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_pause
+
+# Re-downgrade PTEs and re-enable recording without reinitialising tables.
+echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_resume
+
+# Restore GPU permissions, destroy all tables, flush stats to /tmp/.
+echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_stop
+\end{verbatim}
+
+\subsubsection*{Query Controls}
+
+\begin{verbatim}
+# Drain fault buffer, atomically swap live->snapshot, install fresh live table.
+echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
+
+# Emit frozen snapshot; in cumulative mode, merge into session-union first.
+# Output: one line per dirty page — "0x<addr> <timestamp_ns>"
+cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump
+\end{verbatim}
+
+\subsubsection*{Statistics Controls}
+
+\begin{verbatim}
+# Enable instrumentation and reset all counters to zero.
+echo "enable" > /proc/driver/nvidia-uvm/dirty_ds_stats_toggle
+
+# Stop accumulation (counters preserved).
+echo "disable" > /proc/driver/nvidia-uvm/dirty_ds_stats_toggle
+
+# Print per-operation counts, average latency, rwsem wait time, callback timing.
+cat /proc/driver/nvidia-uvm/dirty_ds_stats
+\end{verbatim}
+
+\subsection*{Typical End-to-End Session}
+
+\begin{verbatim}
+./my_cuda_workload &
+PID=$!
+
+echo "$PID delta" > /proc/driver/nvidia-uvm/dirty_tracking_start
+
+sleep 2   # let the workload run one migration interval
+
+echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
+cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump > epoch1_dirty_pages.txt
+
+echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_pause
+# ... perform stop-and-copy transfer ...
+echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_resume
+
+echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
+cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump > epoch2_dirty_pages.txt
+
+echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_stop
+\end{verbatim}
+
+\subsection*{Correctness Tests}
+
+\begin{verbatim}
+# Run every suite in canonical order.
+sudo python3 correctness_tests/run_all.py
+
+# Run a single suite.
+cd correctness_tests/<suite_name> && sudo python3 run_tests.py
+
+# Run specific test cases within a suite (matched by name prefix).
+sudo python3 run_tests.py tc01 tc03
+
+# Skip rebuild and re-run already-compiled binaries.
+sudo python3 run_tests.py --no-build
+
+# Show stdout even for passing tests.
+sudo python3 run_tests.py --verbose
+\end{verbatim}
+
+\subsection*{Performance Tests}
+\begin{verbatim}
+# Run every suite in canonical order.
+sudo python3 correctness_tests/run_all.py
+
+# Run a single suite.
+cd performance_tests/<suite_name> && sudo python3 run_tests.py
+
+# Run specific test cases within a suite (matched by name prefix).
+sudo python3 run_tests.py tc01 tc03
+
+# Skip rebuild and re-run already-compiled binaries.
+sudo python3 run_tests.py --no-build
+
+# Show stdout even for passing tests.
+sudo python3 run_tests.py --verbose
+\end{verbatim}
