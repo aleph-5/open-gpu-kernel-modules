@@ -176,7 +176,6 @@ cumulative table before output.
 masks and tears down live, snapshot, and cumulative tracking state, returning
 the system to its pre-tracking permission configuration.
 
-
 \subsubsection*{Modified Driver Files}
 All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}.
 The files containing functionality added or significantly modified by us are:
@@ -219,10 +218,6 @@ The files containing functionality added or significantly modified by us are:
 
     \item \textbf{\texttt{uvm\_dirty\_ds\_linked\_list.c}}\\
           Singly-linked list with sentinel node.\\
-
-    \item \textbf{\texttt{uvm\_dirty\_ds\_bitmap.c}}\\
-          Flat bit array covering $2^{38}$ pages
-          (32\,MB fixed allocation); O(1) operations; timestamps not stored.
 
     \item \textbf{\texttt{uvm\_dirty\_ds\_nested\_bitmap.c}}\\
           Two-level hierarchical bitmap
@@ -367,32 +362,765 @@ Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
 \subsection*{Design Choices}
 \subsubsection*{Determinism Guarantees}
 
+\paragraph{Write-Capture Determinism}
+The implementation provides deterministic \emph{first-write capture} for GPU
+pages while tracking is active. A page is recorded exactly when its first
+qualifying write/atomic fault is serviced after permissions have been re-armed
+to read-only.
+
+\begin{enumerate}
+    \item \textbf{Arming at lifecycle boundaries.}
+          \texttt{dirty\_tracking\_start} and \texttt{dirty\_tracking\_resume}
+          invoke the registered downgrade callback, which walks the owner
+          VA-space and revokes GPU write-class permissions
+          (\texttt{READ\_WRITE}/\texttt{ATOMIC}) from currently mapped pages.
+          This forces subsequent writes to fault before regaining writable
+          mappings.
+
+    \item \textbf{No non-write false positives, no prefetch bypass.}
+          Dirty insertion is gated to write-class accesses only. Read/prefetch
+          paths are kept read-only for the tracked owner, and GPU migration of
+          previously unmapped pages under active tracking is also mapped
+          read-only, so \texttt{cudaMemPrefetchAsync}-style migrations do not
+          silently bypass write-fault capture.
+
+    \item \textbf{Single insertion point in fault service.}
+          Recording occurs in replayable fault servicing only when
+          \texttt{active=true} and
+          \texttt{service\_access\_type >= UVM\_FAULT\_ACCESS\_TYPE\_WRITE},
+          at which point the page number and \texttt{ktime\_get\_ns()} timestamp
+          are inserted into the live table.
+
+    \item \textbf{Exactly-once entry semantics per live table (epoch).}
+          Backend insertion is first-write-wins (duplicates are ignored), so
+          within a given live table, repeated writes to the same page do not
+          create duplicate entries or overwrite the original timestamp. In
+          \texttt{delta} mode, each \texttt{cutover} installs a fresh live table,
+          so the same page may appear again in a later epoch only if it faults
+          again after mappings become faultable.
+\end{enumerate}
+
+This yields deterministic capture semantics for migration accounting: each
+qualifying write/atomic fault contributes one stable dirty record in the
+current live table. Subsequent writes to an already writable page are not
+re-faulted, so they are not re-recorded until mappings become faultable again
+(for example at \texttt{resume} or a new \texttt{start}).
+
+\vspace{0.5em}
+
+\paragraph{Epoch Determinism on \texttt{start}/\texttt{resume}}
+The epoch entry path is implemented through the same callback chain in both
+\texttt{start} and \texttt{resume}:
+\texttt{uvm\_dirty\_invalidate\_fn()} $\rightarrow$
+\texttt{uvm\_dirty\_activate\_now\_fn()} $\rightarrow$
+\texttt{uvm\_dirty\_barrier\_end\_fn()}.
+\\In \texttt{uvm\_va\_space\_dirty\_init}, these are registered to
+\texttt{uvm\_dirty\_downgrade\_all\_permissions},
+\texttt{uvm\_dirty\_activate\_now}, and \texttt{uvm\_dirty\_barrier\_end}
+respectively.
+
+\begin{enumerate}
+    \item \textbf{Begin-side locking and ownership resolution.}
+          \texttt{uvm\_dirty\_downgrade\_all\_permissions} calls
+          \texttt{uvm\_dirty\_barrier\_begin}, which acquires
+          \texttt{g\_uvm\_global.va\_spaces.lock} and resolves the unique owner
+          \texttt{va\_space} for the tracking PID, returning an error if there
+          is not exactly one \texttt{va\_space} registered under that TGID and
+          keeping \texttt{va\_spaces.lock} held on success.
+          Unlike the query barrier (used in pause/cutover), the start barrier
+          does \emph{not} spin on the fault buffer; it only acquires locks.
+          This is safe because the immediately following \texttt{va\_space\_down\_write}
+          lock prevents all fault service during the critical section, so no
+          faults need to be flushed.
+          \texttt{uvm\_dirty\_downgrade\_all\_permissions} then calls
+          \texttt{uvm\_va\_space\_down\_write(va\_space)} itself, bringing the
+          VA-space write lock under the same critical section as
+          \texttt{va\_spaces.lock}.
+
+    \item \textbf{Permission downgrade while barrier is held.}
+          Under both locks, it walks all managed VA ranges and VA blocks,
+          snapshots per-page write/atomic PTE bitmasks into
+          \texttt{dirty\_downgraded\_pages}/\texttt{dirty\_downgraded\_atomic\_pages}
+          for later restoration at \texttt{stop}, revokes GPU write-class
+          permissions via \texttt{uvm\_va\_block\_revoke\_prot\_mask}, and
+          drains each block's GPU tracker (\texttt{uvm\_tracker\_wait}) to
+          confirm GPU TLB invalidations have completed before advancing to the
+          next block.
+
+    \item \textbf{Activate-before-end ordering.}
+          On success, downgrade returns with both barrier locks still held
+          (\texttt{va\_spaces.lock} and the \texttt{va\_space} write lock).
+          The handler then calls \texttt{uvm\_dirty\_activate\_now\_fn}
+          (\texttt{active=true}) while both locks are still held, and only
+          afterwards calls \texttt{uvm\_dirty\_barrier\_end\_fn}, which
+          releases \texttt{uvm\_va\_space\_down\_write} and
+          \texttt{g\_uvm\_global.va\_spaces.lock}.
+          This ordering eliminates two race windows that would silently lose
+          first-write events:
+          \begin{itemize}
+              \item \textbf{Race A - active before downgrade.}  If
+                    \texttt{active=true} were set before pages are revoked to
+                    read-only, writes to still-writable pages would complete
+                    without faulting and would not be recorded.
+              \item \textbf{Race B - downgraded but not yet active.}  If
+                    pages were revoked to read-only while \texttt{active=false},
+                    write faults arriving in that window would be serviced
+                    (the fault handler grants \texttt{READ\_WRITE} for forward
+                    progress) but not inserted into the dirty table, silently
+                    missing the first-write event.
+          \end{itemize}
+          Holding \texttt{uvm\_va\_space\_down\_write} throughout the
+          transition prevents all fault service for the owner va-space during
+          the critical section. After the function returns and locks are
+          released, any write fault to a downgraded page is recorded
+          deterministically because both conditions are satisfied:
+          \texttt{active=true} and permissions are \texttt{READ\_ONLY}.
+
+    \item \textbf{\texttt{start} semantics.}
+          \texttt{start} first creates fresh table state (and cumulative state
+          in cumulative mode), then executes the activation chain, so it
+          establishes a new epoch from a clean live table.
+
+    \item \textbf{\texttt{resume} semantics.}
+          \texttt{resume} is accepted only for owner PID with
+          \texttt{started=true, active=false}. It re-runs the same lock+downgrade
+          activation chain without reinitializing tables, so recorded entries
+          are preserved across pause/resume.
+
+    \item \textbf{Precise inclusion/exclusion boundary.}
+          Writes before successful \texttt{start} are outside the epoch;
+          writes during pause are excluded (\texttt{active=false}); writes after
+          successful \texttt{start}/\texttt{resume} are included through the
+          write-fault capture path.
+\end{enumerate}
+
+\vspace{1em}
+
+\paragraph{Epoch Determinism on \texttt{pause}}
+The pause operation must establish a precise cutoff where all faults in-flight at
+the moment of pause are resolved before recording is disabled. This ensures the
+dirty set captures a deterministic boundary: all writes before pause are recorded;
+all writes after pause are not.
+
+\begin{enumerate}
+    \item \textbf{Query barrier for synchronization.}
+          \texttt{dirty\_tracking\_pause} acquires the query barrier
+          (\texttt{uvm\_dirty\_query\_barrier\_begin}), which locks all GPU
+          replayable-fault ISRs and spins until the fault buffer is empty.
+          This ensures no fault is mid-service when recording is disabled.
+
+    \item \textbf{Atomic recording disable.}
+          While the query barrier is held (ISRs locked, fault buffer empty),
+          \texttt{active} is set to \texttt{false} via \texttt{WRITE\_ONCE} to
+          prevent the compiler from optimizing or reordering the write. Subsequent
+          faults arriving at the fault handler see \texttt{active=false} and skip
+          dirty insertion.
+
+    \item \textbf{Barrier release enables new faults.}
+          After setting \texttt{active=false}, the query barrier is released,
+          unblocking ISRs and fault buffer processing. Any write faults after this
+          point are serviced (mappings remain faultable) but not recorded, ensuring
+          the pause boundary is sharp and deterministic.
+
+    \item \textbf{Preserved state across pause/resume.}
+          Pause does not modify permissions or destroy tables. The live table,
+          permission state, and accumulated entries remain intact. Resume
+          re-executes the downgrade+activate sequence without reinitializing,
+          so the epoch continues deterministically.
+\end{enumerate}
+
+\vspace{1em}
+
+\paragraph{Epoch Determinism on \texttt{stop}}
+The stop operation must guarantee that the tracking session is completely torn
+down and permissions are exactly restored to their pre-tracking state. This
+ensures deterministic cleanup and prevents resource leaks or stale permissions.
+
+\begin{enumerate}
+    \item \textbf{Permission restoration from snapshot.}
+          At \texttt{stop}, \texttt{uvm\_dirty\_restore\_fn} is called, which
+          walks all VA blocks for the owner and restores the per-page write/atomic
+          permission masks that were captured at \texttt{start}/\texttt{resume}.
+          This restores GPU PTEs to their exact pre-tracking configuration,
+          undoing the downgrade and enabling future non-tracked access.
+
+    \item \textbf{Table destruction and state cleanup.}
+          \texttt{uvm\_dirty\_page\_table\_destroy(false)} deallocates all three
+          tables (live, snapshot, cumulative), freeing associated backend resources.
+          The global state is reset: \texttt{started=false}, \texttt{active=false},
+          and \texttt{snapshot\_pending=false}. Statistics are flushed to
+          \texttt{/tmp/uvm\_dirty\_ds\_stats.txt} for post-session analysis.
+
+    \item \textbf{Ownership and state validation.}
+          \texttt{stop} validates that the requesting PID matches the current
+          owner (if tracking was started for a specific PID). This prevents
+          unauthorized cleanup and ensures teardown is tied to the correct session.
+
+    \item \textbf{Deterministic session boundary.}
+          The combination of permission restoration, table destruction, and
+          state reset establishes a precise end-of-epoch boundary. Any query
+          cutover/dump operations must complete before \texttt{stop}; once
+          \texttt{stop} succeeds, the session is completely dismantled and
+          a new session can be initialized.
+\end{enumerate}
+
+\vspace{1em}
+
+\paragraph{Epoch Determinism on \texttt{query\_cutover}}
+The cutover operation must establish a precise snapshot boundary such that the
+dirty set can be consistently queried without blocking new fault recording.
+All faults before cutover are in the old live table; all faults after belong
+to the new live table.
+
+\begin{enumerate}
+    \item \textbf{Snapshot guard and query barrier.}
+          \texttt{query\_cutover} first validates that no previous snapshot is
+          pending (\texttt{g\_snapshot\_pending==false}), ensuring only one
+          snapshot exists at a time. It then acquires the query barrier
+          (\texttt{uvm\_dirty\_query\_barrier\_begin}), which locks all GPU
+          replayable-fault ISRs and spins until the fault buffer is empty.
+
+    \item \textbf{Atomic table swap and epoch increment.}
+          While the query barrier is held and the DS write lock is acquired,
+          the operation performs three atomic steps: (1) saves current live
+          table to snapshot (\texttt{g\_dirty\_ds\_snapshot = g\_dirty\_ds}),
+          (2) installs fresh live table (\texttt{g\_dirty\_ds = new\_live}),
+          and (3) increments the epoch counter (\texttt{g\_dirty\_epoch += 1}).
+          The snapshot epoch is synchronized (\texttt{g\_dirty\_snapshot\_epoch
+          = g\_dirty\_epoch}).
+
+    \item \textbf{Precise cutover boundary.}
+          Because the query barrier holds ISRs locked and the fault buffer is
+          confirmed empty during the swap, no fault service can interleave with
+          the table swap. Faults arriving after barrier release see the new live
+          table; those in-flight during swap are guaranteed to have completed
+          before the swap (or arrived after and went to new table).
+
+    \item \textbf{Snapshot consumption guard.}
+          After cutover, \texttt{g\_snapshot\_pending} is set to \texttt{true},
+          preventing a new cutover until the snapshot is consumed by
+          \texttt{query\_dump}. This enforces strict cutover-dump ordering and
+          prevents snapshot loss.
+\end{enumerate}
+
+\vspace{1em}
+
+\paragraph{Epoch Determinism on \texttt{query\_dump}}
+The dump operation must return a consistent snapshot of the dirty set at the
+time of the preceding cutover. The output must reflect exactly the pages
+recorded between the previous dump and the current cutover.
+
+\begin{enumerate}
+    \item \textbf{Snapshot presence and mode validation.}
+          \texttt{query\_dump} first validates that a snapshot exists and is
+          pending (\texttt{g\_snapshot\_pending==true} and
+          \texttt{g\_dirty\_ds\_snapshot.priv != NULL}). The query mode
+          (delta or cumulative) is checked to determine which table to emit.
+
+    \item \textbf{Cumulative merge with first-write-wins.}
+          In cumulative mode, the snapshot is merged into the cumulative table
+          (\texttt{uvm\_dirty\_merge\_snapshot\_into\_cumulative\_locked})
+          using first-write-wins semantics: entries already in cumulative are
+          not overwritten. This preserves the earliest timestamp for each page
+          across all query windows in the session.
+
+    \item \textbf{Consistent read under lock.}
+          The read lock on \texttt{uvm\_dirty\_ds\_rwsem} is held while
+          iterating the query table (\texttt{uvm\_dirty\_ds\_for\_each\_in\_range}).
+          This prevents the table from being modified (cutover swaps require
+          write lock) and ensures the output is consistent with the table state
+          at read-lock acquisition.
+
+    \item \textbf{Overflow-safe snapshot persistence.}
+          If the seq\_file buffer overflows (\texttt{seq\_has\_overflowed}),
+          the snapshot is preserved (not destroyed) and \texttt{g\_snapshot\_pending}
+          remains true. The caller retries the read with a larger buffer, and
+          the snapshot is replayed identically. Only when the entire output fits
+          is the snapshot destroyed and \texttt{g\_snapshot\_pending} cleared,
+          allowing the next cutover.
+\end{enumerate}
 
 \subsubsection*{Data Structures}
-      \paragraph{Global state}
-      Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
-      \begin{enumerate}
-            \item \texttt{g\_dirty\_ds} - live table; fault handler inserts here.
-            \item \texttt{g\_dirty\_ds\_snapshot} - frozen copy created by cutover;
-                  exists only between a cutover and the subsequent dump.
-            \item \texttt{g\_dirty\_ds\_cumulative} - session-union table used in
-                  cumulative mode; merge-accumulates snapshot contents at each dump.
-      \end{enumerate}
 
-      \paragraph{Backend abstraction}
-      All three tables share the \texttt{uvm\_dirty\_ds\_ops} interface
-      (\texttt{uvm\_dirty\_ds.h}), which provides init, insert, lookup,
-      for\_each\_in\_range, and destroy.
-      Inline wrappers measure operation latency when statistics are enabled.
-      The active backend is selected at compile time by setting the \texttt{.ops}
-      pointer in the static \texttt{g\_dirty\_ds} initialiser.
+\paragraph{Global state}
+Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
+\begin{enumerate}
+      \item \texttt{g\_dirty\_ds} — live table; the fault handler inserts here
+            on every qualifying write fault while \texttt{active=true}.
+      \item \texttt{g\_dirty\_ds\_snapshot} — frozen copy created by
+            \texttt{query\_cutover}; exists only between a cutover and the
+            subsequent \texttt{query\_dump}.  Once consumed the pointer is
+            set to \texttt{NULL}.
+      \item \texttt{g\_dirty\_ds\_cumulative} — session-union table used in
+            cumulative mode; each \texttt{query\_dump} merges the snapshot
+            into this table with first-write-wins semantics before emitting output.
+\end{enumerate}
+
+\paragraph{Backend abstraction layer}
+
+The three tables all share a single generic interface defined in
+\texttt{uvm\_dirty\_ds.h}.
+The design follows the ops-table (vtable) pattern common in the Linux kernel:
+a \texttt{struct uvm\_dirty\_ds\_ops} holds five function pointers, and each
+backend fills in its own implementations at module link time.
+This separates the \emph{interface} (what operations exist and what they mean)
+from the \emph{implementation} (how a particular data structure carries them
+out), so a new backend can be plugged in by pointing \texttt{g\_dirty\_ds.ops}
+at a different ops struct — no other code needs to change.
+
+\subparagraph{The ops table (\texttt{struct uvm\_dirty\_ds\_ops})}
+
+\begin{itemize}
+    \item \textbf{\texttt{init(ds)}} — allocates and initialises the
+          backend-private state, storing the pointer in \texttt{ds->priv}.
+          Called once per table lifetime under the DS write lock.
+
+    \item \textbf{\texttt{insert(ds, page\_num, timestamp)}} — records a dirty
+          page with its first-write timestamp.
+          All backends implement first-write-wins: if \texttt{page\_num} is
+          already present the call is a no-op and the original timestamp is
+          preserved.
+          Called from the fault-handler hot path.
+
+    \item \textbf{\texttt{lookup(ds, page\_num)}} — returns a pointer to the
+          \texttt{dirty\_page\_info} for the given page, or \texttt{NULL} if
+          not dirty.
+          Used by the cumulative merge path and the snapshot-persistence guard.
+
+    \item \textbf{\texttt{for\_each\_in\_range(ds, start, end, fn, ctx)}} —
+          iterates all dirty pages whose page number falls in
+          $[\textit{start}, \textit{end}]$ and invokes the callback
+          \texttt{fn(page\_num, timestamp, ctx)} for each.
+          Used by \texttt{query\_dump} to emit output and by the cumulative
+          merge path.
+
+    \item \textbf{\texttt{destroy(ds)}} — frees all entries and the
+          backend-private state, then sets \texttt{ds->priv = NULL}.
+          Called under the DS write lock at \texttt{stop} or on error
+          unwind.
+\end{itemize}
+
+\subparagraph{The container (\texttt{struct uvm\_dirty\_ds})}
+
+Each of the three global tables is an instance of:
+\begin{verbatim}
+struct uvm_dirty_ds {
+    const struct uvm_dirty_ds_ops *ops;
+    void                          *priv;
+    struct uvm_dirty_ds_stats      stats;
+};
+\end{verbatim}
+\texttt{ops} is a compile-time constant pointing to the chosen backend.
+\texttt{priv} is the backend-private allocation (e.g.\ the \texttt{struct
+xarray*} for the xarray backend); it is \texttt{NULL} when the table is not
+initialised, which is how \texttt{uvm\_dirty\_tracking\_started()} checks
+whether a session is active.
+\texttt{stats} holds per-table instrumentation counters (see below).
+
+\subparagraph{Inline timing wrappers}
+
+Rather than scattering timing code into each backend,
+\texttt{uvm\_dirty\_ds.h} provides five \texttt{static inline} wrappers
+— one per op — that intercept every call when
+\texttt{ds->stats.enabled} is true:
+
+\begin{enumerate}
+    \item Record \texttt{ktime\_get()} before the call.
+    \item Dispatch through \texttt{ds->ops->op(...)}.
+    \item Add \texttt{ktime\_to\_ns(ktime\_sub(ktime\_get(), t0))} to the
+          corresponding \texttt{atomic64\_t} accumulator.
+    \item Increment the matching \texttt{atomic\_long\_t} count.
+\end{enumerate}
+
+The \texttt{unlikely()} guard on \texttt{stats.enabled} means the check is
+predicted-not-taken in normal operation, so the instrumentation path imposes
+no measurable overhead when disabled.
+Because both the accumulator and the count are atomics, concurrent fault-handler
+threads can update them without a lock.
+
+\subparagraph{Instrumentation via procfs}
+
+The two procfs entries \texttt{dirty\_ds\_stats\_toggle} and
+\texttt{dirty\_ds\_stats} expose the accumulated measurements:
+
+\begin{itemize}
+    \item Writing \texttt{"enable"} to \texttt{dirty\_ds\_stats\_toggle}
+          sets \texttt{stats.enabled = true} \emph{and} resets all counters
+          to zero, giving a clean measurement window.
+          Writing \texttt{"disable"} stops accumulation.
+
+    \item Reading \texttt{dirty\_ds\_stats} calls
+          \texttt{nv\_procfs\_read\_dirty\_ds\_stats}, which reports for each
+          operation: call count, average end-to-end latency in nanoseconds,
+          and average time spent blocked waiting for the DS rwsem.
+          It also reports average latency for the three lifecycle callbacks
+          (\texttt{invalidate}, \texttt{activate\_now}, \texttt{barrier\_end}).
+          On \texttt{stop}, the same counters are flushed to
+          \texttt{/tmp/uvm\_dirty\_ds\_stats.txt} for offline analysis.
+\end{itemize}
+
+The lock-wait fields (\texttt{insert\_lock\_wait\_ns},
+\texttt{lookup\_lock\_wait\_ns}, \texttt{for\_each\_lock\_wait\_ns}) measure
+the time each hot-path call spends blocked in \texttt{down\_read} before
+reaching the backend, separating contention cost from pure algorithmic cost.
+This lets us attribute latency to lock pressure vs.\ backend complexity when
+comparing backends under load.
+
+\paragraph{Backend implementations}
+
+Seven backends are implemented, each compiled unconditionally into the module.
+The active backend is selected at compile time by setting the
+\texttt{.ops} pointer in the static \texttt{g\_dirty\_ds} initialiser;
+switching requires only a one-line source change.
+Table~\ref{tab:backends} summarises the key properties of each.
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabular}{lllll}
+\hline
+\textbf{Backend} & \textbf{Insert} & \textbf{Lookup} & \textbf{Iterate} & \textbf{Notes} \\
+\hline
+xarray           & $O(1)$ amortised  & $O(1)$          & $O(n)$           & atomic \texttt{xa\_cmpxchg}; timestamps stored \\
+sorted vector    & $O(n)$            & $O(\log n)$     & $O(\log n + k)$  & binary-search insert; no internal lock \\
+unsorted vector  & $O(n)$            & $O(n)$          & $O(n)$           & append-only; IRQ-safe spinlock \\
+linked list      & $O(n)$            & $O(n)$          & $O(n)$           & sentinel head; no extra lock \\
+nested bitmap    & $O(1)$            & $O(1)$          & $O(B + k)$       & 2-level xarray+bitmap; timestamps stored \\
+chunked vector   & $O(1)$ amortised  & $O(\log n+n_c)$ & $O(n)$           & background kthread sort \\
+\hline
+\end{tabular}
+\caption{Backend summary. $n$ = dirty page count, $k$ = pages in query range,
+         $w$ = word size in bits, $B$ = number of allocated VA blocks,
+         $n_c$ = entries in active (unsorted) chunk.}
+\label{tab:backends}
+\end{table}
+
+\subparagraph{xarray (\texttt{uvm\_dirty\_ds\_xarray.c})}
+Uses the Linux \texttt{xarray} (a radix-tree variant) keyed by page number.
+Insert performs a fast non-atomic \texttt{xa\_load} check first; if the
+page is absent it allocates a \texttt{dirty\_page\_info} and calls
+\texttt{xa\_cmpxchg(GFP\_ATOMIC)}, which atomically inserts only if the slot
+is still empty.
+A non-\texttt{NULL} return from \texttt{xa\_cmpxchg} means another thread
+won the race (first-write-wins), so the redundant allocation is freed.
+Lookup is a single \texttt{xa\_load}.
+Iteration uses \texttt{xa\_find} with an advancing index.
+Memory is proportional to the number of dirty pages; the xarray allocates
+nodes on demand.
+
+\subparagraph{Sorted vector (\texttt{uvm\_dirty\_ds\_vector.c})}
+Maintains a \texttt{kvmalloc}'d pointer array kept sorted in ascending page
+number order at all times.
+Insert uses binary search (\texttt{vec\_lower\_bound}) to locate the insertion
+point in $O(\log n)$, then \texttt{memmove} to shift the tail in $O(n)$.
+Deduplication is a pointer comparison at the found position.
+Lookup is binary search: $O(\log n)$.
+\texttt{for\_each\_in\_range} binary-searches to the start of the range and
+then walks sequentially.
+The array doubles in capacity when full (\texttt{kvmalloc\_array + memcpy +
+kvfree}).
+This backend relies on the outer DS rwsem for thread safety and carries no
+internal lock (the commented-out spinlock was removed in favour of the rwsem).
+
+\subparagraph{Unsorted vector (\texttt{uvm\_dirty\_ds\_vector\_unsorted.c})}
+A variant that appends entries in fault-arrival order without sorting.
+Insert performs an $O(n)$ linear dedup scan then an $O(1)$ tail append.
+Lookup and \texttt{for\_each\_in\_range} are both $O(n)$ linear scans.
+The backend embeds its own \texttt{spinlock\_t} and uses
+\texttt{spin\_lock\_irqsave} / \texttt{spin\_unlock\_irqrestore} around every
+mutation, making it safe in IRQ context independently of the outer rwsem.
+This backend trades query speed for insertion simplicity and fault-arrival-order
+preservation.
+
+\subparagraph{Linked list (\texttt{uvm\_dirty\_ds\_linked\_list.c})}
+A singly-linked list with a sentinel head node whose \texttt{info} field is
+\texttt{NULL}.
+Both the list struct and each \texttt{dirty\_ll\_node} are heap-allocated.
+Insert walks the list for dedup ($O(n)$) then appends a new tail node.
+Lookup and iteration are also $O(n)$ walks.
+The list carries no internal lock, relying on the outer rwsem.
+It serves primarily as a correctness baseline and debugging aid.
+
+\subparagraph{Nested bitmap (\texttt{uvm\_dirty\_ds\_nested\_bitmap.c})}
+A two-level structure: an \texttt{xarray} maps VA-block indices (each block
+covers 512 pages, matching the UVM 2\,MB VA-block size) to
+\texttt{struct block\_entry} values, each of which holds a 512-bit bitmap and
+a 512-element timestamp array.
+Insert derives the block index and in-block offset in $O(1)$, calls
+\texttt{xa\_cmpxchg} to lazily allocate the block entry on first use, then
+issues \texttt{test\_and\_set\_bit}: if the bit was clear (first write to this
+page) it stores the timestamp with \texttt{WRITE\_ONCE}; if already set it is
+a no-op.
+Lookup is \texttt{xa\_load} + \texttt{test\_bit}: $O(1)$.
+Iteration walks only the allocated blocks via \texttt{xa\_find}, then uses
+\texttt{find\_next\_bit} within each block's bitmap, giving $O(B + k)$ where
+$B$ is the number of allocated blocks.
+The design gives $O(1)$ insert and $O(1)$ lookup and
+also stores timestamps and avoids the 32\,MB fixed allocation for sparse
+working sets.
+
+\subparagraph{Chunked vector (\texttt{uvm\_dirty\_ds\_chunked.c})}
+Splits entries into a sequence of fixed-capacity chunks.
+New entries are appended in $O(1)$ to the current \emph{active chunk} under an
+IRQ-safe \texttt{spinlock\_t}.
+When the active chunk fills, it is \emph{sealed} (a new chunk is allocated and
+installed with a \texttt{WRITE\_ONCE} on \texttt{num\_chunks}) and a background
+\texttt{kthread} (\texttt{uvm\_dirty\_sorter}) is woken via a wait queue to
+sort it using the kernel's \texttt{sort()}.
+Once a chunk is sorted, its \texttt{sorted} flag is published with
+\texttt{smp\_store\_release} so readers can use it via \texttt{smp\_load\_acquire}
+without taking the spinlock.
+Lookup and \texttt{for\_each\_in\_range} for sealed sorted chunks use binary
+search; for the unsorted active chunk they fall back to a linear scan under
+the spinlock.
+This design defers the $O(n \log n)$ sort cost to a background thread,
+keeping the fault-handler insert path at $O(1)$ amortised while still
+providing sorted output for the dump path.
+Up to \texttt{MAX\_CHUNKS} = 64 chunks are supported; the kthread is stopped
+on \texttt{destroy}.
 
 
 \subsubsection*{Concurrency Design}
-A read-write semaphore (\texttt{uvm\_dirty\_ds\_rwsem}) protects all three
-tables.
-Fault-handler insertions and lookups take the read side concurrently.
-Lifecycle operations (init, destroy, cutover swap) take the write side
-exclusively, blocking new insertions only during the brief pointer swap.
-A separate mutex (\texttt{uvm\_dirty\_lifecycle\_lock}) serialises the procfs
-lifecycle handlers (start, stop, pause, resume, cutover) against each other.
+
+The dirty-tracking pipeline spans two execution contexts that run
+concurrently: (1) the GPU replayable-fault bottom-half thread that calls
+\texttt{uvm\_dirty\_page\_table\_record} on every qualifying write fault, and
+(2) user-space procfs callers that drive lifecycle transitions.
+Six distinct synchronization primitives coordinate these contexts.
+
+\paragraph{1.\enspace\texttt{uvm\_dirty\_ds\_rwsem} - table read/write semaphore}
+
+Declared with \texttt{DECLARE\_RWSEM} in \texttt{uvm\_common.c}, this
+kernel read-write semaphore is the primary guard for the three global dirty-set
+table pointers (\texttt{g\_dirty\_ds}, \texttt{g\_dirty\_ds\_snapshot},
+\texttt{g\_dirty\_ds\_cumulative}) and for the session-metadata fields
+(\texttt{g\_dirty\_owner\_tgid}, \texttt{g\_snapshot\_pending},
+\texttt{g\_dirty\_epoch}).
+
+\begin{itemize}
+    \item \textbf{Read side (shared).}
+          All hot-path operations take the read side so that multiple CPUs can
+          record dirty pages concurrently without blocking each other.
+          Specifically, \texttt{uvm\_dirty\_page\_table\_record} (fault-handler
+          insert), \texttt{uvm\_dirty\_page\_table\_lookup},
+          \texttt{uvm\_dirty\_tracking\_started}, and
+          \texttt{uvm\_owner\_tgid\_with\_dirty\_tracking\_started}/
+          \texttt{active} all acquire \texttt{down\_read}.
+          The dump handler's iteration over the query table
+          (\texttt{uvm\_dirty\_ds\_for\_each\_in\_range}) also runs under
+          \texttt{down\_read}, preventing a concurrent cutover from swapping
+          the pointer mid-iteration.
+
+    \item \textbf{Write side (exclusive).}
+          Only three operations require exclusive access: table
+          initialisation (\texttt{uvm\_dirty\_page\_table\_init}), table
+          destruction (\texttt{uvm\_dirty\_page\_table\_destroy}), and the
+          cutover pointer swap inside \texttt{uvm\_dirty\_new\_snapshot}.
+          Each holds \texttt{down\_write} only for the brief critical section
+          during which the live or snapshot pointer is replaced; insert-path
+          threads block for this interval and then resume on the new table.
+\end{itemize}
+
+\noindent
+Replacing a simple mutex with an rwsem here was a deliberate performance
+choice: the fault-handler path can be invoked concurrently from multiple CPU
+cores, and taking an exclusive lock per insert would serialise all of them.
+Under the rwsem, inserts from $N$ cores proceed in parallel; the write
+side is held only for the $O(1)$ pointer swap during cutover.
+
+\paragraph{2.\enspace\texttt{uvm\_dirty\_lifecycle\_lock} - procfs serialisation mutex}
+
+Declared with \texttt{DEFINE\_MUTEX} in \texttt{uvm\_common.c}, this mutex
+ensures that at most one procfs lifecycle operation is in progress at any
+time.
+All eight procfs handlers acquire it on entry and release it on return,
+including \texttt{start}, \texttt{stop}, \texttt{pause}, \texttt{resume},
+\texttt{query\_cutover}, and \texttt{query\_dump}.
+Without this mutex, two concurrent \texttt{start} calls could both pass the
+``not started'' guard and double-initialise tables; a concurrent
+\texttt{stop} and \texttt{cutover} could destroy tables that \texttt{cutover}
+is mid-swap.
+The mutex also serialises multi-step operations like \texttt{start} (which
+calls init, then downgrade, then activate, then barrier-end as a sequence)
+against any interleaving call.
+
+\paragraph{3.\enspace\texttt{g\_uvm\_global.va\_spaces.lock} - global VA-space list mutex}
+
+This pre-existing UVM mutex protects the global linked list of registered
+\texttt{uvm\_va\_space\_t} objects.
+The dirty-tracking code acquires it in two places:
+
+\begin{itemize}
+    \item \textbf{Start barrier} (\texttt{uvm\_dirty\_barrier\_begin}).
+          Held while scanning the list to locate the unique \texttt{va\_space}
+          whose \texttt{owner\_tgid} matches the tracking target.
+          It is kept held throughout the downgrade walk and released only by
+          \texttt{uvm\_dirty\_barrier\_end} after \texttt{active} has been
+          set to \texttt{true}.
+          This prevents a concurrent \texttt{uvm\_open} or GPU registration
+          from inserting a new \texttt{va\_space} for the same TGID between
+          the ownership check and the permission walk.
+
+    \item \textbf{Query barrier} (\texttt{uvm\_dirty\_query\_barrier\_begin}).
+          Held while scanning for the owner \texttt{va\_space} and while
+          acquiring per-GPU ISR locks (see below).
+          Released by \texttt{uvm\_dirty\_query\_barrier\_end} after all ISR
+          locks have been dropped.
+\end{itemize}
+
+\paragraph{4.\enspace\texttt{va\_space->lock} - per-VA-space reader/writer semaphore}
+
+Each \texttt{uvm\_va\_space\_t} carries an rwsem wrapped behind
+\texttt{uvm\_va\_space\_down\_write} / \texttt{uvm\_va\_space\_down\_read}.
+The write side additionally acquires two helper mutexes
+(\texttt{serialize\_writers\_lock} and \texttt{read\_acquire\_write\_release\_lock})
+to implement priority inversion avoidance.
+The dirty-tracking code uses this lock in two modes:
+
+\begin{itemize}
+    \item \textbf{Write mode - start/resume downgrade.}
+          \texttt{uvm\_dirty\_downgrade\_all\_permissions} calls
+          \texttt{uvm\_va\_space\_down\_write} (after
+          \texttt{g\_uvm\_global.va\_spaces.lock} is already held).
+          The write lock excludes all fault-service threads, which hold the
+          read side while processing faults for that VA space.
+          The permission walk and the subsequent \texttt{active=true} write
+          both occur while the write lock is held, closing both Race~A
+          (activate before downgrade) and Race~B (downgrade before activate)
+          described in the Determinism section.
+
+    \item \textbf{Read mode - query barrier GPU enumeration.}
+          \texttt{uvm\_dirty\_query\_barrier\_begin} takes
+          \texttt{uvm\_va\_space\_down\_read} to iterate the set of registered
+          GPUs safely before locking per-GPU ISR state.
+          The read lock is held until the ISR locks have been acquired and the
+          fault buffer is confirmed empty, then released by
+          \texttt{uvm\_dirty\_query\_barrier\_end}.
+\end{itemize}
+
+\paragraph{5.\enspace\texttt{va\_block->lock} - per-VA-block mutex}
+
+Each \texttt{uvm\_va\_block\_t} carries a \texttt{uvm\_mutex\_t} that
+protects its PTE bitmasks and GPU state.
+\texttt{uvm\_dirty\_downgrade\_all\_permissions} acquires this lock for each
+block while it snapshots the per-page write/atomic permission bitmasks into
+\texttt{dirty\_downgraded\_pages} and
+\texttt{dirty\_downgraded\_atomic\_pages}, issues
+\texttt{uvm\_va\_block\_revoke\_prot\_mask}, and calls
+\texttt{uvm\_tracker\_wait} to confirm GPU TLB invalidation.
+The block lock is taken only while processing that block and released before
+moving to the next; it is nested inside the \texttt{va\_space} write lock.
+
+\paragraph{6.\enspace Per-GPU ISR lock - replayable-fault service lock}
+
+\texttt{uvm\_parent\_gpu\_replayable\_faults\_isr\_lock} acquires the ISR
+service lock (\texttt{parent\_gpu->isr.replayable\_faults.service\_lock})
+from a non-interrupt context.
+To prevent an interrupt storm, taking this lock also disables the hardware
+replayable-fault interrupt for that GPU; fault interrupts are re-enabled when
+the lock is released by the corresponding unlock call.
+
+This lock is used exclusively in the \textbf{query barrier}
+(\texttt{uvm\_dirty\_query\_barrier\_begin}).
+After taking \texttt{va\_spaces.lock} and \texttt{va\_space\_down\_read},
+the barrier iterates all parent GPUs registered to the owner VA space and
+acquires the ISR lock for each.
+With all ISR locks held, no new fault bottom-half can be scheduled.
+The barrier then spins on \texttt{uvm\_parent\_gpu\_replayable\_faults\_pending}
+until the fault buffer is drained, confirming that every in-flight fault has
+completed service.
+Only after this confirmation does the caller proceed to swap tables (cutover)
+or disable recording (pause), ensuring a precise, race-free boundary.
+
+\paragraph{7.\enspace\texttt{WRITE\_ONCE} / \texttt{READ\_ONCE} on \texttt{g\_uvm\_dirty\_tracking\_active}}
+
+The boolean flag \texttt{g\_uvm\_dirty\_tracking\_active} is the hottest
+read in the entire pipeline: the fault handler checks it on every qualifying
+write fault before deciding whether to insert a dirty record.
+Rather than taking any lock for this check, the flag is accessed through
+\texttt{READ\_ONCE} in \texttt{uvm\_dirty\_tracking\_active()} and written
+through \texttt{WRITE\_ONCE} in \texttt{uvm\_dirty\_set\_tracking\_active()}
+and \texttt{uvm\_dirty\_page\_table\_destroy()}.
+These barriers prevent the compiler from caching, tearing, or reordering the
+access.
+Correctness of the surrounding critical sections is guaranteed by the
+query barrier or the \texttt{va\_space} write lock held at the moment
+\texttt{WRITE\_ONCE} executes; \texttt{READ\_ONCE} provides only
+visibility, not ordering.
+
+\paragraph{8.\enspace Backend-level locks}
+
+Two backends introduce additional internal locking beneath the rwsem:
+
+\begin{itemize}
+    \item \textbf{Unsorted-vector spinlock.}
+          \texttt{uvm\_dirty\_ds\_vector\_unsorted.c} embeds a
+          \texttt{spinlock\_t} in the vector struct, acquired with
+          \texttt{spin\_lock\_irqsave} / \texttt{spin\_unlock\_irqrestore}
+          around each append, lookup, and iteration.
+          The IRQ-save variant is necessary because this backend is called
+          from the fault bottom-half, which can run with local interrupts
+          enabled; a plain spin lock would deadlock if an interrupt preempted
+          the lock holder and tried to re-acquire it.
+
+    \item \textbf{xarray atomic compare-and-swap.}
+          \texttt{uvm\_dirty\_ds\_xarray.c} uses \texttt{xa\_cmpxchg} with
+          \texttt{GFP\_ATOMIC} for first-write-wins insert.
+          The xarray data structure maintains its own internal spinlock;
+          \texttt{xa\_cmpxchg} performs a single atomic conditional store
+          under that lock without requiring the caller to take any
+          additional lock.
+          A non-\texttt{NULL} return value indicates the page was already
+          present (a later write), and the allocation is freed; a
+          \texttt{NULL} return confirms the entry was inserted as the first
+          write.
+\end{itemize}
+
+\paragraph{Lock ordering summary}
+
+To prevent deadlock, all code that acquires multiple locks does so in the
+following fixed order (outer to inner):
+
+\begin{multline*}
+\texttt{lifecycle\_lock} \;\to\; \texttt{va\_spaces.lock} \;\to\; \texttt{va\_space.lock} \\
+\;\to\; \texttt{ISR\;locks} \;\to\; \texttt{va\_block.lock} \;\to\; \texttt{ds\_rwsem}
+\end{multline*}
+
+\noindent
+The fault handler (bottom-half context) enters only from
+\texttt{va\_space.lock} (read) downward and never acquires
+\texttt{lifecycle\_lock} or \texttt{va\_spaces.lock}, so it cannot
+participate in a cycle with the lifecycle path.
+The dump handler holds \texttt{lifecycle\_lock} and \texttt{ds\_rwsem}
+(read) simultaneously but never acquires \texttt{va\_spaces.lock},
+keeping it disjoint from the downgrade path.
+
+\subsubsection*{Prefetching}
+Prefetch faults are treated as non-dirtying events in the tracking pipeline.
+Hardware prefetch accesses are decoded as
+\texttt{UVM\_FAULT\_ACCESS\_TYPE\_PREFETCH}, while dirty insertion in
+\texttt{uvm\_gpu\_replayable\_faults.c} is gated by
+\texttt{service\_access\_type >= UVM\_FAULT\_ACCESS\_TYPE\_WRITE} together
+with \texttt{uvm\_dirty\_tracking\_active()}. Therefore, prefetch/read faults
+never insert entries into the dirty table directly.
+This includes access-counter-driven paths, which are also serviced as
+prefetch-class accesses in UVM's fault/migration pipeline.
+
+To prevent prefetch from silently restoring writable mappings, the permission
+path in \texttt{compute\_new\_permission()} (\texttt{uvm\_va\_block.c}) clamps
+read/prefetch promotion paths back to \texttt{UVM\_PROT\_READ\_ONLY} for the
+tracked owner. This preserves first-write capture by ensuring that a later true
+write still faults before any dirty insertion occurs.
+
+The migration path is also constrained. In
+\texttt{block\_migrate\_map\_unmapped\_pages()} (\texttt{uvm\_migrate.c}),
+GPU-destination pages are mapped as \texttt{READ\_ONLY} while tracking is
+started. This closes the \texttt{cudaMemPrefetchAsync}-style bypass in which
+unmapped pages could otherwise become writable without passing through normal
+replayable-fault permission computation.
+
+Finally, if a prefetch request violates logical permissions, replayable-fault
+servicing marks it as an invalid prefetch
+(\texttt{mark\_fault\_invalid\_prefetch}) instead of routing it through fatal
+write/atomic cancellation. This keeps forward progress intact while maintaining
+strictly write-triggered dirty accounting.

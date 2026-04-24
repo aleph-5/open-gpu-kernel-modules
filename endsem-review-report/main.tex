@@ -8,6 +8,7 @@
 \usepackage{array}
 \usepackage{longtable}
 \usepackage{enumitem}
+\usepackage{amsmath}
 \usepackage{verbatim}
 \usepackage{microtype}
 \renewcommand{\_}{\textunderscore\allowbreak}
@@ -26,11 +27,18 @@
   \@startsection{subsection}{2}{\z@}%
                 {-1.8ex \@plus -0.5ex \@minus -0.2ex}%
                 { 0.8ex \@plus  0.2ex}%
-                {\fontsize{13}{15}\selectfont\bfseries\raggedright}%
+                {\fontsize{14}{15}\selectfont\bfseries\raggedright}%
+}
+\renewcommand{\subsubsection}{%
+  \@startsection{subsubsection}{3}{\z@}%
+                {-1.5ex \@plus -0.5ex \@minus -0.2ex}%
+                { 0.5ex \@plus  0.1ex}%
+                {\fontsize{12}{13}\selectfont\bfseries\raggedright}%
 }
 \makeatother
 
-\title{CS614 - Endsem Project Review}
+\title{Low-Overhead Dirty Access Tracking in GPU-UVM}
+% \subtitle{CS614 - Endsem Project Review}
 \author{Aditi Khandelia \And Arush Upadhyaya \And Kushagra Srivastava \And Sankalp Mittal \And Vidhi Jain}
 \date{\today}
 

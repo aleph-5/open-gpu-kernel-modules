@@ -131,7 +131,23 @@ The suites are intended to cover the following categories
 
 \paragraph{Observations}
 The tests were run as root, and the current implementation passed every test
-that is present in the repository.
+that is present in the repository. The aggregate result was
+\textbf{69/69 passed}: 
+\texttt{table\_lifecycle} 5/5,
+\texttt{ordering} 8/8, 
+\texttt{determinism} 2/2,
+\texttt{first\_write\_wins} 3/3,
+\texttt{cummulative\_mode} 3/3,
+\texttt{address\_range\_filtering} 5/5,
+\texttt{access\_type\_filtering} 4/4,
+\texttt{snapshot\_isolation} 4/4,
+\texttt{backend\_correctness} 9/9,
+\texttt{procfs\_robustness} 6/6,
+\texttt{lifecycle\_races} 7/7,
+\texttt{scale} 4/4,
+\texttt{stats\_accuracy} 4/4,
+and the \texttt{generic} suite 12/12. The per-test
+runners for the suites report runtimes between 1.95\,s and 3.05\,s.
 
 \begin{center}
 \footnotesize
@@ -252,4 +268,168 @@ Generic & \texttt{test\_dirty\_tracking\_suite} & Integration smoke test coverin
 \normalsize
 \end{center}
 
-\paragraph{Interpretation}
+\subsection*{Performance Testing}
+The performance overhead of the dirty-tracking pipeline was evaluated using the
+\texttt{run\_overhead\_benchmark.sh} script, which measures wall-clock time for
+each benchmark with tracking \textbf{OFF} (baseline) and tracking \textbf{ON},
+then reports average wall time, standard deviation, and overhead percentage
+in a CSV.
+Each benchmark is repeated \texttt{REPS} times (default: 5) and the
+results are averaged.
+The following benchmarks cover a representative range of access patterns.
+
+\begin{enumerate}
+
+    \item \textbf{\texttt{int\_set\_uvm} (4K stride)}
+          \\A synthetic write-only benchmark that initialises every integer in a
+          UVM-managed array using a 4K-page stride access pattern.
+          Because every access touches a fresh page, this maximises the number of
+          UVM fault events and therefore the number of dirty-tracking insertions
+          per byte written, making it the most stress-intensive case for the
+          tracking pipeline.
+
+    \item \textbf{\texttt{int\_set\_uvm} (sequential)}
+          \\The same synthetic write benchmark executed with a sequential (coalesced)
+          access pattern.
+          Compared to the 4K-stride variant, sequential access generates far fewer
+          fault events per byte written and serves as a control for separating
+          per-fault overhead from per-byte overhead.
+
+    \item \textbf{polybench GEMM}
+          \\A standard general matrix multiplication
+          ($C \mathrel{+}= \alpha A B + \beta C$) from the Polybench/GPU suite.
+          GEMM is compute-intensive with high arithmetic density; dirty-tracking
+          overhead is expected to be small relative to total execution time,
+          providing a reference for acceptable overhead on compute-bound kernels.
+
+    \item \textbf{polybench 2MM}
+          \\A two-step matrix multiplication that chains two GEMM-style kernels.
+          Relative to single GEMM it produces a larger write footprint across
+          multiple output matrices, exercising the tracking table's ability to
+          handle a wider set of dirty pages without performance degradation.
+
+    \item \textbf{polybench BICG}
+          \\A BiConjugate Gradient solver kernel that is predominantly read-heavy.
+          Because dirty tracking only intercepts write faults, this benchmark is
+          expected to show near-zero overhead and acts as a \emph{control} to
+          confirm that read-heavy workloads are unaffected by the tracking mechanism.
+
+    \item \textbf{polybench MVT}
+          \\A matrix-vector transpose kernel that is read-mostly with a small
+          write component.
+          Like BICG it exercises the case where most memory traffic is read-only,
+          but the presence of writes allows verification that the small write
+          footprint is correctly recorded.
+
+    \item \textbf{Rodinia Needle (Needleman--Wunsch)}
+          \\A dynamic-programming sequence-alignment kernel from the Rodinia suite,
+          adapted with a \texttt{-mb} flag to control working-set size.
+          It exhibits a mix of reads and writes across a 2-D score matrix,
+          providing a representative real-world workload with moderate write density.
+
+\end{enumerate}
+
+\paragraph{Memory Configurations}
+Each benchmark is run across eight working-set sizes that span
+both the \emph{in-GPU} regime and the \emph{oversubscribed} regime:
+
+\begin{itemize}
+    \item \textbf{In-GPU} (fits in VRAM of the test A40, $\approx$45\,GB):
+          512\,MB, 4\,GB, 8\,GB, 16\,GB, 32\,GB, 40\,GB.
+    \item \textbf{Oversubscribed} (exceeds GPU VRAM, triggers UVM eviction to host):
+          48\,GB, 64\,GB.
+\end{itemize}
+
+The rationale for this split is that dirty-tracking overhead is incurred
+only when UVM fault handlers fire.
+In the in-GPU regime, faults are rare after the initial page population, so
+overhead is expected to be low.
+In the oversubscribed regime, pages are repeatedly evicted and re-faulted,
+amplifying the per-fault cost and making tracking overhead more visible.
+
+\paragraph{Benchmark and Configuration Table}
+The full set of $7 \times 8 = 56$ benchmark/configuration pairs is listed below.
+
+\begin{center}
+\footnotesize
+\begin{longtable}{>{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.4cm} >{\raggedright\arraybackslash}p{5.3cm}}
+\toprule
+Benchmark & Working Set & Memory Mode & Purpose \\
+\midrule
+\endfirsthead
+\toprule
+Benchmark & Working Set & Memory Mode & Purpose \\
+\midrule
+\endhead
+\midrule
+\multicolumn{4}{r}{Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+
+\texttt{int\_set\_uvm} (4K stride) & 512\,MB  & In-GPU        & Stress minimal write footprint with maximum per-page fault rate \\
+\texttt{int\_set\_uvm} (4K stride) & 4\,GB    & In-GPU        & Scale fault count, still below VRAM limit \\
+\texttt{int\_set\_uvm} (4K stride) & 8\,GB    & In-GPU        & Mid-range write-heavy, all pages resident in VRAM \\
+\texttt{int\_set\_uvm} (4K stride) & 16\,GB   & In-GPU        & Larger footprint, tracking table stress \\
+\texttt{int\_set\_uvm} (4K stride) & 32\,GB   & In-GPU        & Near-limit, still fits in GPU \\
+\texttt{int\_set\_uvm} (4K stride) & 40\,GB   & In-GPU        & Maximum in-GPU size \\
+\texttt{int\_set\_uvm} (4K stride) & 48\,GB   & Oversubscribed & Begin eviction regime; overhead amplified by re-faulting \\
+\texttt{int\_set\_uvm} (4K stride) & 64\,GB   & Oversubscribed & Heavy eviction; worst-case per-fault overhead \\
+\midrule
+\texttt{int\_set\_uvm} (sequential) & 512\,MB & In-GPU        & Control: coalesced writes, fewer faults than 4K-stride \\
+\texttt{int\_set\_uvm} (sequential) & 4\,GB   & In-GPU        & Scale sequential writes \\
+\texttt{int\_set\_uvm} (sequential) & 8\,GB   & In-GPU        & Mid-range sequential writes \\
+\texttt{int\_set\_uvm} (sequential) & 16\,GB  & In-GPU        & Large sequential footprint \\
+\texttt{int\_set\_uvm} (sequential) & 32\,GB  & In-GPU        & Near-limit sequential \\
+\texttt{int\_set\_uvm} (sequential) & 40\,GB  & In-GPU        & Maximum in-GPU sequential \\
+\texttt{int\_set\_uvm} (sequential) & 48\,GB  & Oversubscribed & Sequential writes with UVM eviction \\
+\texttt{int\_set\_uvm} (sequential) & 64\,GB  & Oversubscribed & Heavy sequential eviction \\
+\midrule
+polybench GEMM & 512\,MB & In-GPU        & Small matrix multiply; low overhead expected \\
+polybench GEMM & 4\,GB   & In-GPU        & Mid-size compute-bound GEMM \\
+polybench GEMM & 8\,GB   & In-GPU        & Standard large GEMM \\
+polybench GEMM & 16\,GB  & In-GPU        & Large GEMM, tracking table stress \\
+polybench GEMM & 32\,GB  & In-GPU        & Near-limit GEMM \\
+polybench GEMM & 40\,GB  & In-GPU        & Maximum in-GPU GEMM \\
+polybench GEMM & 48\,GB  & Oversubscribed & GEMM with eviction; compute vs.\ fault overhead trade-off \\
+polybench GEMM & 64\,GB  & Oversubscribed & GEMM under heavy eviction \\
+\midrule
+polybench 2MM  & 512\,MB & In-GPU        & Chained GEMM; dual output write footprint \\
+polybench 2MM  & 4\,GB   & In-GPU        & Mid-size dual GEMM \\
+polybench 2MM  & 8\,GB   & In-GPU        & Standard 2MM workload \\
+polybench 2MM  & 16\,GB  & In-GPU        & Large 2MM \\
+polybench 2MM  & 32\,GB  & In-GPU        & Near-limit 2MM \\
+polybench 2MM  & 40\,GB  & In-GPU        & Maximum in-GPU 2MM \\
+polybench 2MM  & 48\,GB  & Oversubscribed & 2MM with eviction \\
+polybench 2MM  & 64\,GB  & Oversubscribed & 2MM under heavy eviction \\
+\midrule
+polybench BICG & 512\,MB & In-GPU        & Read-heavy control; overhead $\approx$0 expected \\
+polybench BICG & 4\,GB   & In-GPU        & Scale read-heavy control \\
+polybench BICG & 8\,GB   & In-GPU        & Mid-range read-heavy \\
+polybench BICG & 16\,GB  & In-GPU        & Large read-heavy workload \\
+polybench BICG & 32\,GB  & In-GPU        & Near-limit read-heavy \\
+polybench BICG & 40\,GB  & In-GPU        & Maximum in-GPU read-heavy \\
+polybench BICG & 48\,GB  & Oversubscribed & Read-heavy with eviction \\
+polybench BICG & 64\,GB  & Oversubscribed & Read-heavy under heavy eviction \\
+\midrule
+polybench MVT  & 512\,MB & In-GPU        & Read-mostly; small write component should be tracked \\
+polybench MVT  & 4\,GB   & In-GPU        & Scale read-mostly workload \\
+polybench MVT  & 8\,GB   & In-GPU        & Mid-range read-mostly \\
+polybench MVT  & 16\,GB  & In-GPU        & Large read-mostly \\
+polybench MVT  & 32\,GB  & In-GPU        & Near-limit read-mostly \\
+polybench MVT  & 40\,GB  & In-GPU        & Maximum in-GPU read-mostly \\
+polybench MVT  & 48\,GB  & Oversubscribed & Read-mostly with eviction \\
+polybench MVT  & 64\,GB  & Oversubscribed & Read-mostly under heavy eviction \\
+\midrule
+Rodinia Needle & 512\,MB & In-GPU        & Mixed read/write DP kernel; small score matrix \\
+Rodinia Needle & 4\,GB   & In-GPU        & Mid-size sequence alignment \\
+Rodinia Needle & 8\,GB   & In-GPU        & Standard Needle workload \\
+Rodinia Needle & 16\,GB  & In-GPU        & Large DP score matrix \\
+Rodinia Needle & 32\,GB  & In-GPU        & Near-limit DP matrix \\
+Rodinia Needle & 40\,GB  & In-GPU        & Maximum in-GPU DP matrix \\
+Rodinia Needle & 48\,GB  & Oversubscribed & Needle with UVM eviction \\
+Rodinia Needle & 64\,GB  & Oversubscribed & Needle under heavy eviction \\
+
+\end{longtable}
+\normalsize
+\end{center}
