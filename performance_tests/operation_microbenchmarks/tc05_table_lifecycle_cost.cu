@@ -247,7 +247,7 @@ int main(void)
                 read_pages<<<1, FAULT_CHUNK>>>(read_buf, m);
                 CUDA_CHECK(cudaDeviceSynchronize());
 
-                /* time reinit: destroys table + invalidates PTEs again */
+                /* time reinit: stop + start path (includes barrier/drain/downgrade) */
                 double t = timed_reinit_delta();
 
                 fprintf(csv3, "%d,%d,%d,%d,%.3f\n", n, m, iter, n, t);

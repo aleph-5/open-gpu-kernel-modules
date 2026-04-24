@@ -703,6 +703,20 @@ NV_STATUS uvm_gpu_fault_buffer_flush(uvm_gpu_t *gpu)
     return status;
 }
 
+// EDIT BY ADITI KHANDELIA
+NV_STATUS uvm_parent_gpu_fault_buffer_flush_locked(uvm_parent_gpu_t *parent_gpu)
+{
+    UVM_ASSERT(parent_gpu->replayable_faults_supported);
+    UVM_ASSERT(uvm_sem_is_locked(&parent_gpu->isr.replayable_faults.service_lock));
+
+    return fault_buffer_flush_locked(parent_gpu,
+        NULL,
+        UVM_GPU_BUFFER_FLUSH_MODE_WAIT_UPDATE_PUT,
+        UVM_FAULT_REPLAY_TYPE_START,
+        NULL);
+}
+// END OF EDIT
+
 static inline int cmp_fault_instance_ptr(const uvm_fault_buffer_entry_t *a,
                                          const uvm_fault_buffer_entry_t *b)
 {
@@ -3162,4 +3176,3 @@ NV_STATUS uvm_test_drain_replayable_faults(UVM_TEST_DRAIN_REPLAYABLE_FAULTS_PARA
 
     return status;
 }
-

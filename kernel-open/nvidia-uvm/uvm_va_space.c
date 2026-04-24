@@ -2953,6 +2953,9 @@ typedef struct
     uvm_va_space_t *owner_va_space;
     uvm_va_block_context_t *block_ctx;
     bool begin_done;
+    bool va_space_write_locked;
+    size_t num_locked_parent_gpus;
+    uvm_parent_gpu_t *locked_parent_gpus[UVM_PARENT_ID_MAX_GPUS];
 } uvm_dirty_start_barrier_ctx_t;
 
 static uvm_dirty_start_barrier_ctx_t g_uvm_dirty_start_barrier_ctx;
@@ -2964,9 +2967,18 @@ static NV_STATUS uvm_dirty_barrier_begin(pid_t owner_tgid,
     uvm_va_space_t *va_space;
     int owner_count = 0;
 
+    uvm_gpu_t *gpu;
+    uvm_parent_gpu_id_t parent_id;
+    uvm_parent_gpu_t *parent_gpu_table[UVM_PARENT_ID_MAX_GPUS];
+
+    ctx->begin_done = false;
     uvm_mutex_lock(&g_uvm_global.va_spaces.lock);
     ctx->owner_va_space = NULL;
     ctx->block_ctx = block_ctx;
+    ctx->va_space_write_locked = false;
+    ctx->num_locked_parent_gpus = 0;
+    memset(ctx->locked_parent_gpus, 0, sizeof(ctx->locked_parent_gpus));
+    memset(parent_gpu_table, 0, sizeof(parent_gpu_table));
 
     list_for_each_entry(va_space, &g_uvm_global.va_spaces.list, list_node) {
         if (va_space->owner_tgid != owner_tgid)
@@ -2984,6 +2996,30 @@ static NV_STATUS uvm_dirty_barrier_begin(pid_t owner_tgid,
         return NV_ERR_GENERIC;
     }
 
+    uvm_va_space_down_read(ctx->owner_va_space);
+
+    for_each_va_space_gpu(gpu, ctx->owner_va_space)
+        parent_gpu_table[uvm_parent_id_gpu_index(gpu->parent->id)] = gpu->parent;
+
+    for_each_parent_gpu_id(parent_id) {
+        uvm_parent_gpu_t *parent_gpu = parent_gpu_table[uvm_parent_id_gpu_index(parent_id)];
+
+        if (!parent_gpu) {
+            continue;
+        }
+
+        if (ctx->num_locked_parent_gpus >= UVM_PARENT_ID_MAX_GPUS) {
+            uvm_va_space_up_read(ctx->owner_va_space);
+            uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
+            return NV_ERR_GENERIC;
+        }
+
+        uvm_parent_gpu_replayable_faults_isr_lock(parent_gpu);
+        ctx->locked_parent_gpus[ctx->num_locked_parent_gpus++] = parent_gpu;
+    }
+
+    uvm_va_space_up_read(ctx->owner_va_space);
+
     ctx->begin_done = true;
     return NV_OK;
 }
@@ -2993,13 +3029,20 @@ static NV_STATUS uvm_dirty_barrier_end(void)
     uvm_dirty_start_barrier_ctx_t *ctx = &g_uvm_dirty_start_barrier_ctx;
 
     if (ctx->begin_done) {
-        if(ctx->owner_va_space) {
+        if (ctx->va_space_write_locked && ctx->owner_va_space) {
             uvm_va_space_up_write(ctx->owner_va_space);
+            ctx->va_space_write_locked = false;
         }
+        while (ctx->num_locked_parent_gpus > 0) {
+            uvm_parent_gpu_replayable_faults_isr_unlock(ctx->locked_parent_gpus[--ctx->num_locked_parent_gpus]);
+        }
+        ctx->num_locked_parent_gpus = 0;
+        memset(ctx->locked_parent_gpus, 0, sizeof(ctx->locked_parent_gpus));
         uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
         ctx->owner_va_space = NULL;
         ctx->block_ctx = NULL;
         ctx->begin_done = false;
+        ctx->va_space_write_locked = false;
     }
 
     return NV_OK;
@@ -3039,6 +3082,18 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
 
     va_space = g_uvm_dirty_start_barrier_ctx.owner_va_space;
     uvm_va_space_down_write(va_space);
+
+    g_uvm_dirty_start_barrier_ctx.va_space_write_locked = true;
+
+    {
+        size_t i;
+        for (i = 0; i < g_uvm_dirty_start_barrier_ctx.num_locked_parent_gpus; i++) {
+            status = uvm_parent_gpu_fault_buffer_flush_locked(
+                g_uvm_dirty_start_barrier_ctx.locked_parent_gpus[i]);
+            if (status != NV_OK)
+                goto out;
+        }
+    }
 
     uvm_for_each_va_range(va_range, va_space) {
         uvm_va_range_managed_t *managed;

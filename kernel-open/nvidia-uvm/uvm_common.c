@@ -185,13 +185,6 @@ NV_STATUS uvm_dirty_page_table_destroy(bool locked) {
     return NV_OK;
 }
 
-NV_STATUS uvm_dirty_page_table_destroy_lifecycle_locked(void) {
-    mutex_lock(&uvm_dirty_lifecycle_lock);
-    NV_STATUS status = uvm_dirty_page_table_destroy(false);
-    mutex_unlock(&uvm_dirty_lifecycle_lock);
-    return status;
-}
-
 NV_STATUS uvm_dirty_page_table_record(unsigned long page_number,
     unsigned long timestamp) { // (EDIT BY VIDHI JAIN)
     NV_STATUS status;
@@ -276,6 +269,62 @@ static NV_STATUS uvm_dirty_merge_snapshot_into_cumulative_locked(void) {
 
     return ctx.status;
 }
+
+NV_STATUS uvm_dirty_page_table_destroy_lifecycle_locked(void) {
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+    down_write(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv == NULL) {
+        up_write(&uvm_dirty_ds_rwsem);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return NV_ERR_GENERIC;
+    }
+
+    WRITE_ONCE(g_uvm_dirty_tracking_active, false);
+
+    // Auto-finalize: promote the live dirty set into the snapshot so the dump
+    // remains readable after the process exits (the query barrier path requires
+    // the va_space to still be in the global list, which won't be true once the
+    // caller returns from here).
+    if (g_dirty_tracking_querying_state == UVM_DIRTY_TRACKING_QUERY_CUMULATIVE) {
+        // Flush any pending snapshot into cumulative, then merge the live set.
+        if (g_snapshot_pending)
+            uvm_dirty_merge_snapshot_into_cumulative_locked();
+        if (g_dirty_ds_snapshot.priv != NULL)
+            uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
+
+        struct uvm_dirty_merge_ctx live_ctx = {
+            .dst    = &g_dirty_ds_cumulative,
+            .status = NV_OK,
+        };
+        uvm_dirty_ds_for_each_in_range(&g_dirty_ds, 0, ~0UL,
+                                        uvm_dirty_merge_snapshot_page, &live_ctx);
+
+        // Move the fully-merged cumulative set into the snapshot slot so the
+        // dump reader (which runs in DELTA mode after reset below) finds it.
+        g_dirty_ds_snapshot = g_dirty_ds_cumulative;
+        g_dirty_ds_cumulative.priv = NULL;
+        uvm_dirty_ds_destroy(&g_dirty_ds);
+    } else {
+        // Delta mode: just hand the live set off to the snapshot slot.
+        if (g_snapshot_pending && g_dirty_ds_snapshot.priv != NULL)
+            uvm_dirty_ds_destroy(&g_dirty_ds_snapshot);
+        g_dirty_ds_snapshot = g_dirty_ds;   // transfer ownership
+    }
+
+    g_dirty_ds.priv = NULL;
+    g_snapshot_pending = true;
+
+    // Reset all tracking state except the snapshot (consumed later by the dump).
+    g_dirty_tracking_querying_state = UVM_DIRTY_TRACKING_QUERY_DELTA;
+    g_dirty_owner_tgid = -1;
+    g_dirty_epoch = 0;
+    g_dirty_snapshot_epoch = 0;
+
+    up_write(&uvm_dirty_ds_rwsem);
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return NV_OK;
+}
 // END OF EDIT
 
 /* original lookup (no semaphore timing)
@@ -343,11 +392,6 @@ static int nv_procfs_read_dirty_tracking_query_dump(struct seq_file *s,
     int ret = 0;
 
     if (!g_snapshot_pending || g_dirty_ds_snapshot.priv == NULL) {
-        ret = -EFAULT;
-        goto out;
-    }
-
-    if (!uvm_dirty_tracking_started()) {
         ret = -EFAULT;
         goto out;
     }
