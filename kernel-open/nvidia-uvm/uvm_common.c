@@ -1026,14 +1026,14 @@ static ssize_t dirty_tracking_hint_write(struct file *file,
 
     if (strcmp(kbuf, "WRITE_SEQ") == 0){
         new_ops = &uvm_dirty_ds_vector_ops;
-        printk(KERNEL_INFO "uvm_dirty: using WRITE_SEQ hint\n");
+        printk(KERN_INFO "uvm_dirty: using WRITE_SEQ hint\n");
     }
     else if (strcmp(kbuf, "WRITE_RAND") == 0){
         new_ops = &uvm_dirty_ds_nested_bitmap_ops;
-        printk(KERNEL_INFO "uvm_dirty: using WRITE_RAND hint\n");
+        printk(KERN_INFO "uvm_dirty: using WRITE_RAND hint\n");
     }
     else{
-        printk(KERNEL_INFO "uvm_dirty: invalid hint '%s', expected 'WRITE_SEQ' or 'WRITE_RAND'\n", kbuf);
+        printk(KERN_INFO "uvm_dirty: invalid hint '%s', expected 'WRITE_SEQ' or 'WRITE_RAND'\n", kbuf);
         return -EINVAL;
     }
 

@@ -170,8 +170,8 @@ int main(void)
         if (expected_set[p] && !got_set[p]) missing++;
 
     stop_track();
-    procfs_write_exact(PROCFS_HINT, "WRITE_SEQ"); /* restore default */
-    CUDA_CHECK(cudaFree(d_indices));
+    procfs_write_exact(PROCFS_HINT, "WRITE_SEQ"); // restore default
+	CUDA_CHECK(cudaFree(d_indices));
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n != written_n || out_of_range || unsorted || duplicates || missing || unexpected);

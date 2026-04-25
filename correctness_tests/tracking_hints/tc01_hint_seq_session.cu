@@ -135,7 +135,7 @@ int main(void)
     }
 
     stop_track();
-    procfs_write_exact(PROCFS_HINT, "WRITE_SEQ"); /* leave at default */
+	procfs_write_exact(PROCFS_HINT, "WRITE_SEQ"); // restore default
     CUDA_CHECK(cudaFree(managed));
 
     int failed = (n != TOTAL_PAGES || out_of_range || unsorted || missing);
