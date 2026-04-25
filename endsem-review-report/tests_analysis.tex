@@ -308,90 +308,64 @@ both the \emph{in-GPU} regime and the \emph{oversubscribed} regime:
           48\,GB, 64\,GB.
 \end{itemize}
 
-\paragraph{Benchmark and Configuration Table}
-The full set of 54 benchmark/configuration pairs with measured results is listed below.
 
-\begin{center}
-\footnotesize
-\begin{longtable}{>{\raggedright\arraybackslash}p{3.6cm} >{\raggedright\arraybackslash}p{2.0cm} >{\raggedright\arraybackslash}p{2.4cm} >{\raggedright\arraybackslash}p{5.3cm}}
-\toprule
-Benchmark & Working Set & Memory Mode & Purpose \\
-\midrule
-\endfirsthead
-\toprule
-Benchmark & Working Set & Memory Mode & Purpose \\
-\midrule
-\endhead
-\midrule
-\multicolumn{4}{r}{Continued on next page} \\
-\endfoot
-\bottomrule
-\endlastfoot
+\paragraph{Benchmarks}
+\begin{enumerate}
 
-\texttt{int\_set\_uvm} (4K stride) & 512\,MB  & In-GPU        & Worst-case synthetic: every write touches a fresh page, maximising UVM fault events and dirty-tracking insertions per byte. \\
-\texttt{int\_set\_uvm} (4K stride) & 4\,GB    & In-GPU        & \\
-\texttt{int\_set\_uvm} (4K stride) & 8\,GB    & In-GPU        & \\
-\texttt{int\_set\_uvm} (4K stride) & 16\,GB   & In-GPU        & \\
-\texttt{int\_set\_uvm} (4K stride) & 32\,GB   & In-GPU        & \\
-\texttt{int\_set\_uvm} (4K stride) & 40\,GB   & In-GPU        & \\
-\texttt{int\_set\_uvm} (4K stride) & 48\,GB   & Oversubscribed & \\
-\texttt{int\_set\_uvm} (4K stride) & 64\,GB   & Oversubscribed & \\
-\midrule
-\texttt{int\_set\_uvm} (sequential) & 512\,MB & In-GPU        & Control for 4K-stride: coalesced writes generate fewer fault events per byte, isolating per-fault overhead from per-byte overhead. \\
-\texttt{int\_set\_uvm} (sequential) & 4\,GB   & In-GPU        & \\
-\texttt{int\_set\_uvm} (sequential) & 8\,GB   & In-GPU        & \\
-\texttt{int\_set\_uvm} (sequential) & 16\,GB  & In-GPU        & \\
-\texttt{int\_set\_uvm} (sequential) & 32\,GB  & In-GPU        & \\
-\texttt{int\_set\_uvm} (sequential) & 40\,GB  & In-GPU        & \\
-\texttt{int\_set\_uvm} (sequential) & 48\,GB  & Oversubscribed & \\
-\texttt{int\_set\_uvm} (sequential) & 64\,GB  & Oversubscribed & \\
-\midrule
-polybench GEMM & 512\,MB & In-GPU        & Compute-bound reference: high arithmetic density amortises tracking cost; measures overhead on kernels dominated by computation rather than memory faults. \\
-polybench GEMM & 4\,GB   & In-GPU        & \\
-polybench GEMM & 8\,GB   & In-GPU        & \\
-polybench GEMM & 16\,GB  & In-GPU        & \\
-polybench GEMM & 32\,GB  & In-GPU        & \\
-polybench GEMM & 40\,GB  & In-GPU        & \\
-polybench GEMM & 48\,GB  & Oversubscribed & \\
-polybench GEMM & 64\,GB  & Oversubscribed & \\
-\midrule
-polybench 2MM  & 512\,MB & In-GPU        & Chained dual GEMM: larger write footprint across two output matrices tests tracking table scalability under heavier write load than single GEMM. \\
-polybench 2MM  & 4\,GB   & In-GPU        & \\
-polybench 2MM  & 8\,GB   & In-GPU        & \\
-polybench 2MM  & 16\,GB  & In-GPU        & \\
-polybench 2MM  & 32\,GB  & In-GPU        & \\
-polybench 2MM  & 40\,GB  & In-GPU        & \\
-\midrule
-polybench BICG & 512\,MB & In-GPU        & Read-heavy workload: predominantly read traffic exercises the tracking pipeline's read-fault bypass and measures overhead on kernels with minimal write footprint. \\
-polybench BICG & 4\,GB   & In-GPU        & \\
-polybench BICG & 8\,GB   & In-GPU        & \\
-polybench BICG & 16\,GB  & In-GPU        & \\
-polybench BICG & 32\,GB  & In-GPU        & \\
-polybench BICG & 40\,GB  & In-GPU        & \\
-polybench BICG & 48\,GB  & Oversubscribed & \\
-polybench BICG & 64\,GB  & Oversubscribed & \\
-\midrule
-polybench MVT  & 512\,MB & In-GPU        & Read-mostly with small write component: verifies that a minor write footprint is correctly tracked without inflating overhead on otherwise read-heavy traffic. \\
-polybench MVT  & 4\,GB   & In-GPU        & \\
-polybench MVT  & 8\,GB   & In-GPU        & \\
-polybench MVT  & 16\,GB  & In-GPU        & \\
-polybench MVT  & 32\,GB  & In-GPU        & \\
-polybench MVT  & 40\,GB  & In-GPU        & \\
-polybench MVT  & 48\,GB  & Oversubscribed & \\
-polybench MVT  & 64\,GB  & Oversubscribed & \\
-\midrule
-Rodinia Needle & 512\,MB & In-GPU        & Real-world mixed read/write DP kernel: representative workload with moderate write density across a 2-D score matrix; working-set size controlled via \texttt{-mb}. \\
-Rodinia Needle & 4\,GB   & In-GPU        & \\
-Rodinia Needle & 8\,GB   & In-GPU        & \\
-Rodinia Needle & 16\,GB  & In-GPU        & \\
-Rodinia Needle & 32\,GB  & In-GPU        & \\
-Rodinia Needle & 40\,GB  & In-GPU        & \\
-Rodinia Needle & 48\,GB  & Oversubscribed & \\
-Rodinia Needle & 64\,GB  & Oversubscribed & \\
+    \item \textbf{\texttt{int\_set\_uvm} (4K stride)}
+          \\Worst-case write-intensive synthetic: every write touches a fresh page at
+          4\,KB stride, maximising UVM fault events and dirty-tracking insertions per
+          byte written.
+          Run across both in-GPU and oversubscribed configurations to measure how
+          overhead scales with working-set size and to observe eviction-driven
+          re-faulting behavior.
 
-\end{longtable}
-\normalsize
-\end{center}
+    \item \textbf{\texttt{int\_set\_uvm} (sequential)}
+          \\Control for the 4K-stride variant: coalesced sequential writes to the same
+          allocation generate fewer fault events per byte, isolating per-fault tracking
+          overhead from per-byte overhead.
+          Compared directly with the stride variant to quantify the impact of access
+          pattern on tracking cost across identical working-set sizes.
+
+    \item \textbf{polybench GEMM}
+          \\Compute-bound reference: high arithmetic density amortises tracking cost
+          over long kernel runtimes, measuring overhead on kernels dominated by
+          floating-point computation rather than memory faults.
+          Also run in the oversubscribed regime; a parameter-driven regime shift at
+          large matrix sizes causes baseline time to drop sharply, making the fixed
+          tracking overhead appear proportionally larger.
+
+    \item \textbf{polybench 2MM}
+          \\Chained dual-GEMM benchmark: two consecutive matrix multiplications produce
+          a larger write footprint across two output matrices, testing tracking-table
+          scalability under heavier write load than a single GEMM while retaining high
+          arithmetic intensity.
+          Oversubscribed configurations were not collected for this benchmark.
+
+    \item \textbf{polybench BICG}
+          \\Read-heavy workload: predominantly read traffic exercises the tracking
+          pipeline's read-fault bypass path and measures overhead on kernels with a
+          minimal write footprint.
+          Also run in the oversubscribed regime, where the fraction of time spent in
+          fault handling increases and amplifies per-insertion cost.
+
+    \item \textbf{polybench MVT}
+          \\Read-mostly with a small write component: verifies that a minor write
+          footprint is correctly tracked without inflating overhead on otherwise
+          read-heavy traffic.
+          Complements BICG with a slightly different read-to-write ratio and is
+          also exercised in the oversubscribed regime.
+
+    \item \textbf{Rodinia Needle (Needleman--Wunsch)}
+          \\Real-world dynamic-programming kernel with mixed read/write access to a
+          2-D score matrix; working-set size is controlled via the \texttt{-mb}
+          parameter.
+          Above a working-set threshold the benchmark reduces its iteration count,
+          drastically shrinking the write footprint and the number of UVM faults
+          fired---causing overhead to collapse from $>$800\% at small sizes to
+          near zero at large ones.
+
+\end{enumerate}
 
 \paragraph{Results}
 Table~\ref{tab:overhead} reports measured overhead percentages for all
@@ -537,4 +511,152 @@ confirming the pipeline is lightweight relative to GPU computation.
 The oversubscribed regime adds eviction-driven re-faulting, but first-write-wins
 semantics cap dirty insertions to one per page per epoch regardless of eviction
 frequency, preventing unbounded overhead growth.
+
+
+\paragraph{Cross-Backend Overhead Comparison}
+The seven available backends differ substantially in algorithmic complexity for
+insert, lookup, and iteration.
+Tables~\ref{tab:backend_overhead_stride} and~\ref{tab:backend_overhead_gemm}
+compare wall-clock overhead across all backends for the two most discriminating
+benchmarks: \texttt{int\_set\_uvm} 4K-stride (maximum insert pressure) and
+polybench GEMM (compute-dominated, low insert pressure).
+Each cell is the overhead percentage (tracking ON vs.\ OFF, 5-run average)
+after recompiling the kernel module with the corresponding \texttt{.ops} pointer
+set in \texttt{uvm\_common.c}.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+}
+\toprule
+\textbf{Size} &
+\rotatebox{90}{\textbf{Bitmap}} &
+\rotatebox{90}{\textbf{XArray}} &
+\rotatebox{90}{\textbf{Vector}} &
+\rotatebox{90}{\textbf{Vec.-U}} &
+\rotatebox{90}{\textbf{Chunked}} &
+\rotatebox{90}{\textbf{Nested BM}} &
+\rotatebox{90}{\textbf{Linked List}} \\
+\midrule
+512\,MB              & --- & --- & $+57.5\%$   & --- & --- & --- & --- \\
+4\,GB                & --- & --- & $+372.3\%$  & --- & --- & --- & --- \\
+8\,GB                & --- & --- & $+659.9\%$  & --- & --- & --- & --- \\
+16\,GB               & --- & --- & $+1108.2\%$ & --- & --- & --- & --- \\
+32\,GB               & --- & --- & $+1537.6\%$ & --- & --- & --- & --- \\
+40\,GB               & --- & --- & $+1688.3\%$ & --- & --- & --- & --- \\
+\rowcolor[gray]{0.92}
+48\,GB$^\dagger$     & --- & --- & $+1730.7\%$ & --- & --- & --- & --- \\
+\rowcolor[gray]{0.92}
+64\,GB$^\dagger$     & --- & --- & $+1547.1\%$ & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\caption{\texttt{int\_set\_uvm} 4K-stride overhead by backend (5-run average,
+         tracking ON vs.\ OFF).
+         Vec.-U\,=\,Vector Unsorted; Nested BM\,=\,Nested Bitmap.
+         Vector column carried from Table~\ref{tab:overhead}.
+         $^\dagger$~Oversubscribed.}
+\label{tab:backend_overhead_stride}
+\end{table}
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+}
+\toprule
+\textbf{Size} &
+\rotatebox{90}{\textbf{Bitmap}} &
+\rotatebox{90}{\textbf{XArray}} &
+\rotatebox{90}{\textbf{Vector}} &
+\rotatebox{90}{\textbf{Vec.-U}} &
+\rotatebox{90}{\textbf{Chunked}} &
+\rotatebox{90}{\textbf{Nested BM}} &
+\rotatebox{90}{\textbf{Linked List}} \\
+\midrule
+512\,MB              & --- & --- & $+26.0\%$  & --- & --- & --- & --- \\
+4\,GB                & --- & --- & $+19.3\%$  & --- & --- & --- & --- \\
+8\,GB                & --- & --- & $+15.1\%$  & --- & --- & --- & --- \\
+16\,GB               & --- & --- & $+13.0\%$  & --- & --- & --- & --- \\
+32\,GB               & --- & --- & $+207.6\%$ & --- & --- & --- & --- \\
+40\,GB               & --- & --- & $+258.8\%$ & --- & --- & --- & --- \\
+\rowcolor[gray]{0.92}
+48\,GB$^\dagger$     & --- & --- & $+213.1\%$ & --- & --- & --- & --- \\
+\rowcolor[gray]{0.92}
+64\,GB$^\dagger$     & --- & --- & $+261.6\%$ & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\caption{Polybench GEMM overhead by backend (5-run average, tracking ON vs.\ OFF).
+         Vec.-U\,=\,Vector Unsorted; Nested BM\,=\,Nested Bitmap.
+         Vector column carried from Table~\ref{tab:overhead}.
+         $^\dagger$~Oversubscribed.}
+\label{tab:backend_overhead_gemm}
+\end{table}
+
+\paragraph{Per-Operation Latency Across Backends}
+The stats subsystem records per-call nanosecond timing for every backend
+operation via \texttt{uvm\_dirty\_ds\_stats}.
+Enable it by writing \texttt{enable} to the stats procfs node before the
+benchmark run; results are written to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
+Table~\ref{tab:backend_ops} reports average insert, lookup, and
+\texttt{for\_each\_in\_range} latencies plus lock-wait time for each backend
+measured under the \texttt{int\_set\_uvm} 4K-stride workload at 16\,GB
+(the size where insert pressure is highest without entering the oversubscribed
+regime).
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{2.0cm}
+  >{\centering\arraybackslash}p{1.5cm}
+  >{\centering\arraybackslash}p{1.7cm}
+  >{\centering\arraybackslash}p{1.5cm}
+  >{\centering\arraybackslash}p{1.7cm}
+  >{\centering\arraybackslash}p{1.7cm}
+}
+\toprule
+\textbf{Backend} &
+\textbf{Insert} & \textbf{Insert} &
+\textbf{Lookup} & \textbf{Lookup} &
+\textbf{For-each} \\
+&
+\textbf{avg (ns)} & \textbf{lock-wait (ns)} &
+\textbf{avg (ns)} & \textbf{lock-wait (ns)} &
+\textbf{avg (ns)} \\
+\midrule
+Bitmap        & --- & --- & --- & --- & --- \\
+XArray        & --- & --- & --- & --- & --- \\
+Vector        & --- & --- & --- & --- & --- \\
+Vec. Unsorted & --- & --- & --- & --- & --- \\
+Chunked       & --- & --- & --- & --- & --- \\
+Nested Bitmap & --- & --- & --- & --- & --- \\
+Linked List   & --- & --- & --- & --- & --- \\
+\bottomrule
+\end{tabular}
+\caption{Average per-operation latency and lock-wait time per backend,
+         measured via \texttt{uvm\_dirty\_ds\_stats} under
+         \texttt{int\_set\_uvm} 4K-stride at 16\,GB.}
+\label{tab:backend_ops}
+\end{table}
+
 
