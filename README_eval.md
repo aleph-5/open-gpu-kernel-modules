@@ -295,7 +295,15 @@ sudo ./tc01_stress_testing 100000      # N = pages, default 1000
 
 #### P4 — Cross-benchmark overhead (the headline numbers)
 
+```bash
+cd cuda-oversubscribed-benchmarks-main
+make -j$(nproc)                                  # Builds all benchmarks
+sudo bash run_overhead_benchmark.sh 5            # REPS=5 (default, all benchmarks)
+# OR:
+sudo bash run_overhead_benchmark.sh 10 int_set_4k gemm  # REPS=10, specific benchmarks
+```
 
+- Expected result: CSV file (overhead_results.csv) with dirty-tracking overhead measured across workloads (int_set, polybench, rodinia). Tracks wall-time with tracking OFF vs. ON, reports overhead percentage and dirty page counts per benchmark.
 
 #### P5 — Per-operation latency by backend
 
