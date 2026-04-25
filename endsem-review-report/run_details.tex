@@ -116,20 +116,34 @@ sudo python3 run_tests.py --no-build
 sudo python3 run_tests.py --verbose
 \end{lstlisting}
 
-\mainsubsection{Performance Tests}
+\mainsubsection{Benchmarks}
+
+All benchmark commands must be run from the
+\texttt{cuda-oversubscribed-benchmarks-main/} directory as root.
+The script builds all binaries, then runs each selected benchmark
+\texttt{REPS} times with tracking \emph{off} and \emph{on}, and writes
+wall-time statistics and overhead percentage to a CSV.
+
 \begin{lstlisting}
-# Run every suite in canonical order.
-sudo python3 correctness_tests/run_all.py
+# Build all benchmark binaries (also done automatically by the script).
+make -j$(nproc)
 
-# Run a single suite.
-cd performance_tests/<suite_name> && sudo python3 run_tests.py
+# Run all benchmarks, 5 repetitions each (default).
+sudo bash run_overhead_benchmark.sh
 
-# Run specific test cases within a suite (matched by name prefix).
-sudo python3 run_tests.py tc01 tc03
+# Run all benchmarks with a custom repetition count.
+sudo bash run_overhead_benchmark.sh 10
 
-# Skip rebuild and re-run already-compiled binaries.
-sudo python3 run_tests.py --no-build
+# Run a subset of benchmarks by name prefix, 5 reps.
+# Valid prefixes: int_set_4k, int_set_seq, gemm, 2mm, bicg, mvt, needle
+# Each prefix selects all size variants (512m, 4g, 8g, ... 64g).
+sudo bash run_overhead_benchmark.sh 5 gemm bicg needle
 
-# Show stdout even for passing tests.
-sudo python3 run_tests.py --verbose
+# Write results to a custom CSV path instead of overhead_results.csv.
+OUT_CSV=/tmp/my_results.csv sudo bash run_overhead_benchmark.sh
 \end{lstlisting}
+
+Results are saved to \texttt{overhead\_results.csv} (columns:
+\texttt{benchmark}, \texttt{reps}, \texttt{off\_avg\_s}, \texttt{off\_std\_s},
+\texttt{on\_avg\_s}, \texttt{on\_std\_s}, \texttt{overhead\_pct}).
+Per-run dirty-page dumps land in \texttt{/tmp/tracking\_preload\_dumps/}.

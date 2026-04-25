@@ -1,7 +1,7 @@
 # CUDA UVM Benchmarks
 
 This repository has multiple benchmark suites, from multiple sources and 
-with some of our modifications.  
+with some modifications, obtained from Pranjal Singh (prsingh@cse.iitk.ac.in)
 
 ### Polybench
 
