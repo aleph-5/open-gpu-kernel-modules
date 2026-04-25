@@ -998,6 +998,70 @@ static const struct proc_ops dirty_tracking_stop_fops = {
     .proc_write = dirty_tracking_stop,
 };
 
+// EDIT BY SANKALP MITTAL
+/*
+ * Switch can only be done when tracking is not active
+ * this means even if tracking is paused the data structure
+ * cannot be switched.
+*/
+static ssize_t dirty_tracking_hint_write(struct file *file,
+                                         const char __user *buf,
+                                         size_t count,
+                                         loff_t *ppos)
+{
+    char kbuf[16];
+    size_t to_copy = min(count, sizeof(kbuf) - 1);
+    const struct uvm_dirty_ds_ops *new_ops;
+
+    if (copy_from_user(kbuf, buf, to_copy))
+        return -EFAULT;
+    kbuf[to_copy] = '\0';
+
+    {
+        size_t n = strnlen(kbuf, sizeof(kbuf));
+        while (n > 0 && (kbuf[n - 1] == '\n' || kbuf[n - 1] == '\r' ||
+                         kbuf[n - 1] == ' '  || kbuf[n - 1] == '\t'))
+            kbuf[--n] = '\0';
+    }
+
+    if (strcmp(kbuf, "WRITE_SEQ") == 0){
+        new_ops = &uvm_dirty_ds_vector_ops;
+        printk(KERNEL_INFO "uvm_dirty: using WRITE_SEQ hint\n");
+    }
+    else if (strcmp(kbuf, "WRITE_RAND") == 0){
+        new_ops = &uvm_dirty_ds_nested_bitmap_ops;
+        printk(KERNEL_INFO "uvm_dirty: using WRITE_RAND hint\n");
+    }
+    else{
+        printk(KERNEL_INFO "uvm_dirty: invalid hint '%s', expected 'WRITE_SEQ' or 'WRITE_RAND'\n", kbuf);
+        return -EINVAL;
+    }
+
+    mutex_lock(&uvm_dirty_lifecycle_lock);
+    down_write(&uvm_dirty_ds_rwsem);
+
+    if (g_dirty_ds.priv != NULL ||
+        g_dirty_ds_snapshot.priv != NULL ||
+        g_dirty_ds_cumulative.priv != NULL) {
+        up_write(&uvm_dirty_ds_rwsem);
+        mutex_unlock(&uvm_dirty_lifecycle_lock);
+        return -EBUSY;
+    }
+
+    g_dirty_ds.ops            = new_ops;
+    g_dirty_ds_snapshot.ops   = new_ops;
+    g_dirty_ds_cumulative.ops = new_ops;
+
+    up_write(&uvm_dirty_ds_rwsem);
+    mutex_unlock(&uvm_dirty_lifecycle_lock);
+    return count;
+}
+
+static const struct proc_ops dirty_tracking_hint_fops = {
+    .proc_write = dirty_tracking_hint_write,
+};
+// END OF EDIT
+
 // END OF EDIT
 
 /* original procfs stats reader (no lock wait fields)
@@ -1175,6 +1239,15 @@ NV_STATUS uvm_dirty_procfs_init(struct proc_dir_entry *parent)
                         &dirty_tracking_query_cutover_fops);
     if (entry == NULL)
         return NV_ERR_OPERATING_SYSTEM;
+
+    // EDIT BY SANKALP MITTAL — workload hint (WRITE_SEQ / WRITE_RAND)
+    entry = proc_create("dirty_tracking_hint",
+                        0222,
+                        parent,
+                        &dirty_tracking_hint_fops);
+    if (entry == NULL)
+        return NV_ERR_OPERATING_SYSTEM;
+    // END OF EDIT
 
     // EDIT BY KUSHAGRA
     entry = NV_CREATE_PROC_FILE("dirty_ds_stats", parent, dirty_ds_stats_entry, NULL);

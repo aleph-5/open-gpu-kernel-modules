@@ -46,6 +46,7 @@ SUITE_ORDER = [
     "access_type_filtering",
     "snapshot_isolation",
     "backend_correctness",
+    "tracking_hints",
     "procfs_robustness",
     "lifecycle_races",
     "scale",
