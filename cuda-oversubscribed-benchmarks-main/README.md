@@ -3,11 +3,6 @@
 This repository has multiple benchmark suites, from multiple sources and 
 with some of our modifications.  
 
-There is no satisfactory suite out there (established + UVM + 
-memory-footprint-configurable + no-binaries-loaded), and that is why we 
-maintain this. Please keep the code here "clean" and portable.
-
-
 ### Polybench
 
 The official version of Polybench does not use UVM. However, UVMBench's 
@@ -34,15 +29,6 @@ We use dataframes (`pandas`, `cudf`) and graph algorithms (`cugraph`).
   array.
 - `data_structures/bptree`: B-Trees on GPUs
 - `data_structures/skiplist`: incomplete
-
-### VLLM
-
-VLLM is a submodule. I used this command (and this source).  
-You might need to change the `--branch` and the URL.  
-
-```sh
-git submodule add -b uvm_0.16.0rc1  git@git.cse.iitk.ac.in:prospar/vllm.git
-```
 
 ## Usage
 
