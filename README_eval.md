@@ -15,7 +15,7 @@ open-gpu-kernel-modules/
 |
 |-- kernel-open/nvidia-uvm/        # Modified NVIDIA UVM driver
 |
-|-- correctness_tests/             # 15 CUDA correctness suites + run_all.py
+|-- correctness_tests/             # 16 CUDA correctness suites + run_all.py
 |   |-- access_type_filtering/     # writes vs. reads, atomics, prefetch
 |   |-- address_range_filtering/   # range filter, sub-page rounding
 |   |-- backend_correctness/       # invariants of dump output
@@ -63,8 +63,8 @@ open-gpu-kernel-modules/
 
 | Resource    | Required                                                     |
 |-------------|--------------------------------------------------------------|
-| CPU         | x86-64, ≥ 8 cores recommended for kernel build              |
-| Memory      | ≥ 16 GB RAM (≥ 64 GB recommended for oversubscription tests) |
+| CPU         | x86-64, >= 8 cores recommended for kernel build              |
+| Memory      | >= 16 GB RAM (>= 64 GB recommended for oversubscription tests) |
 | Storage     | ~25 GB free on the system partition (kernel + module build, CUDA toolkit, benchmark data) |
 | GPU         | NVIDIA GPU with UVM support (tested on **NVIDIA A40, 45 GB VRAM**) |
 | Privileges  | **root** required (writes to `/proc/driver/nvidia-uvm/`)     |
@@ -75,9 +75,9 @@ open-gpu-kernel-modules/
 | Component          | Version (tested)                       |
 |--------------------|----------------------------------------|
 | Operating System   | Ubuntu 22.04 LTS                       |
-| Linux Kernel       | **6.8**                                |
+| Linux Kernel       | **6.8** (No modifications)             |
 | NVIDIA Driver      | **580.65.06** (this tree, modified)    |
-| CUDA Toolkit       | ≥ 12.x (for `nvcc`)                    |
+| CUDA Toolkit       | >= 12.x (for `nvcc`)                   |
 | Python             | 3.8+ (for the `run_tests.py` scripts)  |
 | Standard utilities | `make`, `gcc`, `bash`, `modprobe`      |
 
@@ -141,10 +141,10 @@ The implementation is feature-complete for **GPU write-fault tracking with first
 | 14 | Stats accuracy | [`correctness_tests/stats_accuracy/run_tests.py`](correctness_tests/stats_accuracy/run_tests.py) | 4 tests; toggle on/off | Insert counter == #distinct pages; counters reset on stop+start | 4/4 PASS |
 | 15 | Table lifecycle | [`correctness_tests/table_lifecycle/run_tests.py`](correctness_tests/table_lifecycle/run_tests.py) | 5 tests; multi-reinit stress | Reinit clears entries; multi-allocation tracked in one session | 5/5 PASS |
 | 16 | Backend-selection hint interface | [`correctness_tests/tracking_hints/run_tests.py`](correctness_tests/tracking_hints/run_tests.py) | 3 tests; switch hint between sessions | Output identical under SEQ vs. RAND hint; switch is safe between sessions | 3/3 PASS |
-| 17 | Performance overhead (general) | [`performance_tests/general_performance/`](performance_tests/general_performance/) | tc01 sequential, tc02 random; tracking ON vs. OFF | Wall-time overhead in `results.csv` | See §7.2 |
+| 17 | Performance overhead (general) | [`performance_tests/general_performance/`](performance_tests/general_performance/) | tc01 sequential, tc02 random; tracking ON vs. OFF | Wall-time overhead in `results.csv` | See 7.2 |
 | 18 | Per-operation microbenchmarks | [`performance_tests/operation_microbenchmarks/run_tests.py`](performance_tests/operation_microbenchmarks/run_tests.py) | tc01–tc05; per-op nanosecond cost | Insert / lookup / lifecycle per-call ns latency in CSVs | Numerical CSVs |
 | 19 | Stress | [`performance_tests/stress_tests/tc01_stress_testing.cu`](performance_tests/stress_tests/tc01_stress_testing.cu) | N pages (default 1000) | No dropped page under high write pressure | All pages reported |
-| 20 | Cross-benchmark / cross-regime overhead | [`cuda-oversubscribed-benchmarks-main/`](cuda-oversubscribed-benchmarks-main/) | 7 benchmarks × 8 sizes (512MB → 64GB) × 5 reps | Wall-time overhead vs. baseline | Reproduces Table in §7.2 |
+| 20 | Cross-benchmark / cross-regime overhead | [`cuda-oversubscribed-benchmarks-main/`](cuda-oversubscribed-benchmarks-main/) | 7 benchmarks x 8 sizes (512MB → 64GB) x 5 reps | Wall-time overhead vs. baseline | Reproduces Table in 7.2 |
 
 ### 3.1 Aggregate test result
 
@@ -206,9 +206,9 @@ cd correctness_tests
 sudo python3 run_all.py
 ```
 
-Expected: `12/12 PASS`.
+Expected: `16/16 suites PASS` (74 individual tests total).
 
-### 6.3 Drive the procfs interface by hand (≈ 5 min)
+### 6.3 Drive the procfs interface by hand (~ 5 min)
 
 In one terminal, launch any CUDA workload that uses `cudaMallocManaged` and writes to it (e.g. one of the [performance_tests/general_performance](performance_tests/general_performance/) binaries). Capture its PID. In another terminal run:
 
@@ -249,12 +249,12 @@ echo "WRITE_SEQ" | sudo tee /proc/driver/nvidia-uvm/dirty_tracking_hint
 | # | Purpose | Command | Estimated runtime | Expected result | Where to find the actual result |
 |---|---------|---------|-------------------|-----------------|----------------------------------|
 | 1 | Run every correctness suite in canonical order | `sudo python3 correctness_tests/run_all.py` | < 5 min | 74/74 PASS | Stdout per-suite PASS/FAIL summary |
-| 2 | Run a single suite (e.g. ordering) | `cd correctness_tests/ordering && sudo python3 run_tests.py` | ≈ 16 s | 8/8 PASS | Stdout |
-| 3 | Run a single test in a suite | `sudo python3 run_tests.py tc01` | ≈ 2 s | PASS | Stdout |
+| 2 | Run a single suite (e.g. ordering) | `cd correctness_tests/ordering && sudo python3 run_tests.py` | ~ 16 s | 8/8 PASS | Stdout |
+| 3 | Run a single test in a suite | `sudo python3 run_tests.py tc01` |~ 2 s | PASS | Stdout |
 | 4 | Re-run already-built binaries | `sudo python3 run_tests.py --no-build` | < 5 s/suite | PASS | Stdout |
-| 5 | Verbose mode (show stdout of passing tests) | `sudo python3 run_tests.py --verbose` | ≈ same as 2 | PASS | Stdout |
+| 5 | Verbose mode (show stdout of passing tests) | `sudo python3 run_tests.py --verbose` | ~ same as 2 | PASS | Stdout |
 
-The full per-test result table (suite × test name × purpose × runtime) is reproduced in [endsem-review-report/main.pdf](endsem-review-report/main.pdf) "Testing and Analysis".
+The full per-test result table (suite x test name x purpose x runtime) is reproduced in [endsem-review-report/main.pdf](endsem-review-report/main.pdf) "Testing and Analysis".
 
 ### 7.2 Performance experiments
 
@@ -266,6 +266,10 @@ make
 sudo ./tc01_performance_overhead > results_seq.csv   # sequential write workload
 sudo ./tc02_random_write_overhead > results_rand.csv # random write workload
 ```
+
+- **Estimated runtime:** ~5–10 min (build) + ~30 s per benchmark binary.
+- **Expected result:** Two CSV files with wall-time overhead; tracking ON increases runtime proportionally to write-fault density.
+- **Access:** `results_seq.csv` and `results_rand.csv` in `performance_tests/general_performance/`.
 
 #### P2 — Per-operation microbenchmarks
 
@@ -291,7 +295,9 @@ make
 sudo ./tc01_stress_testing 100000      # N = pages, default 1000
 ```
 
+- **Estimated runtime:** ~2–3 min (build + run at N=100000).
 - **Expected result:** Every written page reported; stdout reports any miss.
+- **Access:** Stdout.
 
 #### P4 — Cross-benchmark overhead (the headline numbers)
 
@@ -303,7 +309,9 @@ sudo bash run_overhead_benchmark.sh 5            # REPS=5 (default, all benchmar
 sudo bash run_overhead_benchmark.sh 10 int_set_4k gemm  # REPS=10, specific benchmarks
 ```
 
-- Expected result: CSV file (overhead_results.csv) with dirty-tracking overhead measured across workloads (int_set, polybench, rodinia). Tracks wall-time with tracking OFF vs. ON, reports overhead percentage and dirty page counts per benchmark.
+- **Estimated runtime:** ~30–90 min for the full sweep (7 benchmarks x 8 sizes x 5 reps); use the specific-benchmark form for a quick spot-check (~5–10 min).
+- **Expected result:** `overhead_results.csv` with wall-time tracking OFF vs. ON, overhead percentage, and dirty page count per benchmark x size combination.
+- **Access:** `cuda-oversubscribed-benchmarks-main/overhead_results.csv`; compare against `endsem-review-report/overhead_results_final.csv`.
 
 #### P5 — Per-operation latency by backend
 
@@ -314,6 +322,10 @@ To test the latency of different data structures:
 3. `echo enable | sudo tee /proc/driver/nvidia-uvm/dirty_ds_stats_toggle`.
 4. Run the workload (e.g. `int_set_uvm` 4K-stride at 16GB).
 5. `cat /proc/driver/nvidia-uvm/dirty_ds_stats` — average insert / lookup / for-each / lock-wait nanoseconds.
+
+- **Estimated runtime:** ~15–20 min per backend (rebuild + workload run).
+- **Expected result:** Per-backend ns averages for insert, lookup, for-each, and lock-wait; values vary by backend (e.g., bitmap insert is O(1), sorted-vector lookup is O(log n)).
+- **Access:** `cat /proc/driver/nvidia-uvm/dirty_ds_stats` after step 5 above.
 
 ### 7.3 Findings (crash / deadlock / assertion failures observed during evaluation)
 

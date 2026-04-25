@@ -650,6 +650,93 @@ recorded between the previous dump and the current cutover.
           allowing the next cutover.
 \end{enumerate}
 
+\subsubsection*{Query Modes}
+
+The tracking system supports two query modes, selected at \texttt{dirty\_tracking\_start}
+time and fixed for the lifetime of the session.
+The mode governs how \texttt{query\_dump} assembles its output from the
+three-table pipeline (\texttt{g\_dirty\_ds}, \texttt{g\_dirty\_ds\_snapshot},
+\texttt{g\_dirty\_ds\_cumulative}).
+
+\paragraph{Delta mode}
+In delta mode the output of each \texttt{query\_dump} reflects only the pages
+written between the immediately preceding \texttt{query\_cutover} and the one
+before it — a per-epoch incremental diff.
+
+\begin{enumerate}
+    \item \textbf{Epoch scoping.}
+          \texttt{query\_cutover} atomically promotes the live table to the
+          snapshot and installs a fresh empty live table.
+          All write faults that arrived before the barrier are captured in the
+          frozen snapshot; all faults after the barrier go to the new live table.
+          Because the live table starts empty on every cutover, the snapshot
+          contains exactly and only the pages first-written in the elapsed epoch.
+
+    \item \textbf{Dump behaviour.}
+          \texttt{query\_dump} reads the snapshot directly without touching
+          \texttt{g\_dirty\_ds\_cumulative}. It emits one line per entry
+          (\texttt{0x\textit{addr}\ \textit{timestamp\_ns}}), then destroys the
+          snapshot and clears \texttt{g\_snapshot\_pending}, allowing the next
+          cutover.
+
+    \item \textbf{Use case.}
+          Delta mode is suited to iterative pre-copy migration: each round
+          transfers the pages reported in the previous epoch's dump, so the
+          working set of remaining dirty pages shrinks toward zero over successive
+          rounds. Because the cumulative table is never populated, delta mode
+          also has lower memory overhead during long sessions with many cutovers.
+\end{enumerate}
+
+\paragraph{Cumulative mode}
+In cumulative mode each dump emits the union of all pages written since
+\texttt{dirty\_tracking\_start}, regardless of how many cutover/dump cycles
+have elapsed.
+
+\begin{enumerate}
+    \item \textbf{Snapshot merge.}
+          Before emitting output, \texttt{query\_dump} calls
+          \texttt{uvm\_dirty\_merge\_snapshot\_into\_cumulative\_locked}, which
+          iterates every entry in the frozen snapshot and inserts it into
+          \texttt{g\_dirty\_ds\_cumulative} using first-write-wins semantics:
+          if the page is already present in the cumulative table its original
+          timestamp is preserved; if absent, the snapshot's timestamp is adopted.
+          After the merge the snapshot is destroyed and \texttt{g\_snapshot\_pending}
+          is cleared.
+
+    \item \textbf{Dump behaviour.}
+          \texttt{query\_dump} then iterates \texttt{g\_dirty\_ds\_cumulative}
+          (not the now-destroyed snapshot) and emits its full contents.
+          The output therefore grows monotonically: a page that appeared in any
+          earlier epoch remains visible in every subsequent dump, with its
+          earliest recorded timestamp.
+
+    \item \textbf{First-write-wins across epochs.}
+          Because the merge step is first-write-wins and the cumulative table
+          is never cleared during an active session, the timestamp associated
+          with each page address always reflects the first qualifying write
+          fault observed since \texttt{start}, even if the same page faulted
+          again in a later epoch. This provides a stable, session-global dirty
+          set for workloads where the caller needs to reason about \emph{total}
+          footprint rather than incremental change.
+
+    \item \textbf{Use case.}
+          Cumulative mode is suited to final-copy migration: after all
+          iterative rounds complete, a single cumulative dump identifies every
+          page touched during the entire session, providing the complete set that
+          must be transferred before the workload is suspended.
+\end{enumerate}
+
+\paragraph{Mode interaction with \texttt{pause}/\texttt{resume}}
+Both modes are unaffected by pause/resume cycles at the table level.
+During a paused interval \texttt{active=false}, so no inserts reach the live
+table; the cumulative table is not modified either.
+On \texttt{resume}, the live table continues accumulating into whichever epoch
+was current at pause time; a subsequent \texttt{query\_cutover} captures
+exactly the pages written before pause plus those written after resume,
+with the paused interval contributing nothing to the dirty set.
+This keeps both delta and cumulative semantics well-defined across
+pause/resume boundaries.
+
 \subsubsection*{Data Structures}
 
 \paragraph{Global state}
