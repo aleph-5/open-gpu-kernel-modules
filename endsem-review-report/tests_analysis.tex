@@ -512,7 +512,6 @@ The oversubscribed regime adds eviction-driven re-faulting, but first-write-wins
 semantics cap dirty insertions to one per page per epoch regardless of eviction
 frequency, preventing unbounded overhead growth.
 
-
 \paragraph{Cross-Backend Overhead Comparison}
 The seven available backends differ substantially in algorithmic complexity for
 insert, lookup, and iteration.
@@ -548,16 +547,16 @@ set in \texttt{uvm\_common.c}.
 \rotatebox{90}{\textbf{Nested BM}} &
 \rotatebox{90}{\textbf{Linked List}} \\
 \midrule
-512\,MB              & --- & --- & $+57.5\%$   & --- & --- & --- & --- \\
-4\,GB                & --- & --- & $+372.3\%$  & --- & --- & --- & --- \\
-8\,GB                & --- & --- & $+659.9\%$  & --- & --- & --- & --- \\
-16\,GB               & --- & --- & $+1108.2\%$ & --- & --- & --- & --- \\
-32\,GB               & --- & --- & $+1537.6\%$ & --- & --- & --- & --- \\
-40\,GB               & --- & --- & $+1688.3\%$ & --- & --- & --- & --- \\
+512\,MB              & $+58.1\%$   & $+36.6\%$   & $+57.5\%$   & $+900.8\%$   & --- & --- & --- \\
+4\,GB                & $+367.2\%$  & $+272.0\%$  & $+372.3\%$  & $+27730.1\%$ & --- & --- & --- \\
+8\,GB                & $+615.5\%$  & $+462.1\%$  & $+659.9\%$  & DNF          & --- & --- & --- \\
+16\,GB               & $+1076.5\%$ & $+680.8\%$  & $+1108.2\%$ & DNF          & --- & --- & --- \\
+32\,GB               & $+1618.9\%$ & $+981.1\%$  & $+1537.6\%$ & DNF          & --- & --- & --- \\
+40\,GB               & $+1687.0\%$ & $+1046.0\%$ & $+1688.3\%$ & DNF          & --- & --- & --- \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & --- & --- & $+1730.7\%$ & --- & --- & --- & --- \\
+48\,GB$^\dagger$     & $+1677.6\%$ & $+1038.7\%$ & $+1730.7\%$ & DNF          & --- & --- & --- \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & --- & --- & $+1547.1\%$ & --- & --- & --- & --- \\
+64\,GB$^\dagger$     & $+1611.5\%$ & $+942.0\%$  & $+1547.1\%$ & DNF          & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \caption{\texttt{int\_set\_uvm} 4K-stride overhead by backend (5-run average,
@@ -592,16 +591,16 @@ set in \texttt{uvm\_common.c}.
 \rotatebox{90}{\textbf{Nested BM}} &
 \rotatebox{90}{\textbf{Linked List}} \\
 \midrule
-512\,MB              & --- & --- & $+26.0\%$  & --- & --- & --- & --- \\
-4\,GB                & --- & --- & $+19.3\%$  & --- & --- & --- & --- \\
-8\,GB                & --- & --- & $+15.1\%$  & --- & --- & --- & --- \\
-16\,GB               & --- & --- & $+13.0\%$  & --- & --- & --- & --- \\
-32\,GB               & --- & --- & $+207.6\%$ & --- & --- & --- & --- \\
-40\,GB               & --- & --- & $+258.8\%$ & --- & --- & --- & --- \\
+512\,MB              & --- & $+26.3\%$  & $+26.0\%$  & $-93.3\%$  & --- & --- & --- \\
+4\,GB                & --- & $+24.7\%$  & $+19.3\%$  & $+380.8\%$ & --- & --- & --- \\
+8\,GB                & --- & $+17.1\%$  & $+15.1\%$  & $+551.3\%$ & --- & --- & --- \\
+16\,GB               & --- & $+13.6\%$  & $+13.0\%$  & $+395.8\%$ & --- & --- & --- \\
+32\,GB               & --- & $+266.8\%$ & $+207.6\%$ & $+224.1\%$ & --- & --- & --- \\
+40\,GB               & --- & $+256.1\%$ & $+258.8\%$ & $+211.8\%$ & --- & --- & --- \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & --- & --- & $+213.1\%$ & --- & --- & --- & --- \\
+48\,GB$^\dagger$     & --- & $+259.3\%$ & $+213.1\%$ & $+250.3\%$ & --- & --- & --- \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & --- & --- & $+261.6\%$ & --- & --- & --- & --- \\
+64\,GB$^\dagger$     & --- & $+266.2\%$ & $+261.6\%$ & $+316.4\%$ & --- & --- & --- \\
 \bottomrule
 \end{tabular}
 \caption{Polybench GEMM overhead by backend (5-run average, tracking ON vs.\ OFF).
@@ -658,5 +657,6 @@ Linked List   & --- & --- & --- & --- & --- \\
          \texttt{int\_set\_uvm} 4K-stride at 16\,GB.}
 \label{tab:backend_ops}
 \end{table}
+
 
 
