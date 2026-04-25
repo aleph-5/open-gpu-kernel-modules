@@ -23,7 +23,7 @@ REPS=${1:-5}
 shift || true   # remaining positional args are benchmark names to run (empty = all)
 FILTER=("$@")   # e.g. ("gemm" "sgemm" "bfs")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT_CSV="$SCRIPT_DIR/overhead_results.csv"
+OUT_CSV="${OUT_CSV:-$SCRIPT_DIR/overhead_results.csv}"
 DUMP_DIR="/tmp/tracking_preload_dumps"
 
 DT_START="/proc/driver/nvidia-uvm/dirty_tracking_start"
@@ -219,7 +219,7 @@ for entry in "${BENCHMARKS[@]}"; do
     if [[ ${#FILTER[@]} -gt 0 ]]; then
         match=0
         for f in "${FILTER[@]}"; do
-            [[ "$f" == "$name" ]] && match=1 && break
+            [[ "$name" == "$f"* ]] && match=1 && break
         done
         [[ $match -eq 0 ]] && continue
     fi
