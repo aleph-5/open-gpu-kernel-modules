@@ -32,13 +32,13 @@ OVERSUB_X = 5.5
 PREFIXES = ['int_set_4k', 'int_set_seq', 'gemm', '2mm', 'bicg', 'mvt', 'needle']
 
 COLORS = {
-    'int_set_4k':  '#d62728',
-    'int_set_seq': '#ff7f0e',
-    'gemm':        '#1f77b4',
-    '2mm':         '#17becf',
-    'bicg':        '#2ca02c',
-    'mvt':         '#9467bd',
-    'needle':      '#8c564b',
+    'int_set_4k':  '#E8909A',  # pastel rose
+    'int_set_seq': '#F4A27A',  # pastel coral
+    'gemm':        '#7EB8D4',  # pastel blue
+    '2mm':         '#84C9D4',  # pastel teal
+    'bicg':        '#84C49E',  # pastel mint
+    'mvt':         '#B8A8D8',  # pastel lavender
+    'needle':      '#D4C07A',  # pastel gold
 }
 
 LABELS = {

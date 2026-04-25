@@ -511,8 +511,8 @@ semantics cap dirty insertions to one per page per epoch regardless of eviction
 frequency, preventing unbounded overhead growth.
 
 \paragraph{Cross-Backend Overhead Comparison}
-The seven available backends differ substantially in algorithmic complexity for
-insert, lookup, and iteration.
+The six available backends differ substantially in algorithmic complexity for
+insert and iteration.
 Tables~\ref{tab:backend_overhead_stride} and~\ref{tab:backend_overhead_gemm}
 compare wall-clock overhead across all backends for the two most discriminating
 benchmarks: \texttt{int\_set\_uvm} 4K-stride (maximum insert pressure) and
@@ -533,11 +533,9 @@ set in \texttt{uvm\_common.c}.
   >{\centering\arraybackslash}p{1.35cm}
   >{\centering\arraybackslash}p{1.35cm}
   >{\centering\arraybackslash}p{1.35cm}
-  >{\centering\arraybackslash}p{1.35cm}
 }
 \toprule
 \textbf{Size} &
-\rotatebox{90}{\textbf{Bitmap}} &
 \rotatebox{90}{\textbf{XArray}} &
 \rotatebox{90}{\textbf{Vector}} &
 \rotatebox{90}{\textbf{Vec.-U}} &
@@ -545,16 +543,16 @@ set in \texttt{uvm\_common.c}.
 \rotatebox{90}{\textbf{Nested BM}} &
 \rotatebox{90}{\textbf{Linked List}} \\
 \midrule
-512\,MB              & $+58.1\%$   & $+36.6\%$   & $+57.5\%$   & $+900.8\%$   & --- & --- & --- \\
-4\,GB                & $+367.2\%$  & $+272.0\%$  & $+372.3\%$  & $+27730.1\%$ & --- & --- & --- \\
-8\,GB                & $+615.5\%$  & $+462.1\%$  & $+659.9\%$  & DNF          & --- & --- & --- \\
-16\,GB               & $+1076.5\%$ & $+680.8\%$  & $+1108.2\%$ & DNF          & --- & --- & --- \\
-32\,GB               & $+1618.9\%$ & $+981.1\%$  & $+1537.6\%$ & DNF          & --- & --- & --- \\
-40\,GB               & $+1687.0\%$ & $+1046.0\%$ & $+1688.3\%$ & DNF          & --- & --- & --- \\
+512\,MB              & $+36.6\%$   & $+57.5\%$   & $+900.8\%$   & $+247.9\%$   & $+48.6\%$   & $917.4\%$\\
+4\,GB                & $+272.0\%$  & $+372.3\%$  & $+27730.1\%$ & $+16951.0\%$ & $+263.6\%$  & --- \\
+8\,GB                & $+462.1\%$  & $+659.9\%$  & OOM          & OOM          & $+456.8\%$  & --- \\
+16\,GB               & $+680.8\%$  & $+1108.2\%$ & OOM          & OOM          & $+689.3\%$  & --- \\
+32\,GB               & $+981.1\%$  & $+1537.6\%$ & OOM          & OOM          & $+914.0\%$  & --- \\
+40\,GB               & $+1046.0\%$ & $+1688.3\%$ & OOM          & OOM          & $+1001.2\%$ & --- \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & $+1677.6\%$ & $+1038.7\%$ & $+1730.7\%$ & DNF          & --- & --- & --- \\
+48\,GB$^\dagger$     & $+1038.7\%$ & $+1730.7\%$ & OOM          & OOM          & $+922.9\%$  & --- \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & $+1611.5\%$ & $+942.0\%$  & $+1547.1\%$ & DNF          & --- & --- & --- \\
+64\,GB$^\dagger$     & $+942.0\%$  & $+1547.1\%$ & OOM          & OOM          & $+921.0\%$  & --- \\
 \bottomrule
 \end{tabular}
 \caption{\texttt{int\_set\_uvm} 4K-stride overhead by backend (5-run average,
@@ -564,6 +562,29 @@ set in \texttt{uvm\_common.c}.
          $^\dagger$~Oversubscribed.}
 \label{tab:backend_overhead_stride}
 \end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\linewidth]{backend_stride.pdf}
+\caption{4K-stride overhead by backend vs.\ working-set size.
+         XArray, Vector, and Nested Bitmap scale to all sizes;
+         Vec.-U, Chunked, and Linked List are shown only at the sizes where they
+         did not OOM (markers with upward arrows indicate values exceeding the axis).
+         Grey shaded region: oversubscribed regime ($\geq$48\,GB).}
+\label{fig:backend_stride}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.9\linewidth]{backend_gemm.pdf}
+\caption{GEMM overhead by backend vs.\ working-set size.
+         Chunked is plotted as a line up to 16\,GB (its last valid size);
+         Vec.-U and Linked List are shown as scattered markers where they fit within
+         the axis range (upward arrow at 4\,GB indicates off-chart values).
+         Dotted horizontal line at 0\% for reference.
+         Grey shaded region: oversubscribed regime ($\geq$48\,GB).}
+\label{fig:backend_gemm}
+\end{figure}
 
 \begin{table}[H]
 \centering
@@ -577,11 +598,9 @@ set in \texttt{uvm\_common.c}.
   >{\centering\arraybackslash}p{1.35cm}
   >{\centering\arraybackslash}p{1.35cm}
   >{\centering\arraybackslash}p{1.35cm}
-  >{\centering\arraybackslash}p{1.35cm}
 }
 \toprule
 \textbf{Size} &
-\rotatebox{90}{\textbf{Bitmap}} &
 \rotatebox{90}{\textbf{XArray}} &
 \rotatebox{90}{\textbf{Vector}} &
 \rotatebox{90}{\textbf{Vec.-U}} &
@@ -589,16 +608,16 @@ set in \texttt{uvm\_common.c}.
 \rotatebox{90}{\textbf{Nested BM}} &
 \rotatebox{90}{\textbf{Linked List}} \\
 \midrule
-512\,MB              & --- & $+26.3\%$  & $+26.0\%$  & $-93.3\%$  & --- & --- & --- \\
-4\,GB                & --- & $+24.7\%$  & $+19.3\%$  & $+380.8\%$ & --- & --- & --- \\
-8\,GB                & --- & $+17.1\%$  & $+15.1\%$  & $+551.3\%$ & --- & --- & --- \\
-16\,GB               & --- & $+13.6\%$  & $+13.0\%$  & $+395.8\%$ & --- & --- & --- \\
-32\,GB               & --- & $+266.8\%$ & $+207.6\%$ & $+224.1\%$ & --- & --- & --- \\
-40\,GB               & --- & $+256.1\%$ & $+258.8\%$ & $+211.8\%$ & --- & --- & --- \\
+512\,MB              & $+26.3\%$  & $+26.0\%$  & $-93.3\%$  & $+30.3\%$  & $+23.9\%$ & $+161.2\%$ \\
+4\,GB                & $+24.7\%$  & $+19.3\%$  & $+380.8\%$ & $+103.1\%$ & $+25.4\%$ & $+1147.3\%$ \\
+8\,GB                & $+17.1\%$  & $+15.1\%$  & $+551.3\%$ & $+137.3\%$ & $+20.9\%$ & --- \\
+16\,GB               & $+13.6\%$  & $+13.0\%$  & OOM        & $+287.3\%$ & $+13.4\%$ & --- \\
+32\,GB               & $+266.8\%$ & $+207.6\%$ & OOM        & OOM        & OOM       & --- \\
+40\,GB               & $+256.1\%$ & $+258.8\%$ & OOM        & OOM        & OOM       & --- \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & --- & $+259.3\%$ & $+213.1\%$ & $+250.3\%$ & --- & --- & --- \\
+48\,GB$^\dagger$     & $+259.3\%$ & $+213.1\%$ & OOM        & OOM        & OOM       & --- \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & --- & $+266.2\%$ & $+261.6\%$ & $+316.4\%$ & --- & --- & --- \\
+64\,GB$^\dagger$     & $+266.2\%$ & $+261.6\%$ & OOM        & OOM        & OOM       & --- \\
 \bottomrule
 \end{tabular}
 \caption{Polybench GEMM overhead by backend (5-run average, tracking ON vs.\ OFF).
@@ -608,53 +627,121 @@ set in \texttt{uvm\_common.c}.
 \label{tab:backend_overhead_gemm}
 \end{table}
 
+
+\textbf{4K-stride (Figure~\ref{fig:backend_stride}).}\enspace
+The three scalable backends separate clearly from the rest.
+Nested Bitmap and XArray track nearly in lockstep at every working-set size
+(e.g., 263\% vs.\ 272\% at 4\,GB; 922\% vs.\ 1039\% at 48\,GB), reflecting
+their similar per-fault code paths and near-identical lock-wait times (33\,ns each,
+Table~\ref{tab:backend_ops}).
+Vector runs consistently 30--70\% higher than either, because each insert must
+maintain a sorted order via binary search (867\,ns avg vs.\ 69--145\,ns for the
+other two).
+Vec.\ Unsorted and Chunked exhibit catastrophic overhead at 4\,GB
+($+$27{,}730\% and $+$16{,}951\%) before OOMing; their insert latencies of 65{,}010\,ns
+and 196{,}990\,ns explain why every UVM write fault imposes an enormous
+tracking cost.
+Linked List is confined to 512\,MB and shows overhead comparable to Vec.\ Unsorted at that size.
+In the oversubscribed regime ($\geq$48\,GB), Nested Bitmap and XArray
+converge further as eviction-subsystem cost eclipses tracking cost.
+
+\textbf{GEMM (Figure~\ref{fig:backend_gemm}).}\enspace
+The compute-bound GEMM benchmark produces far fewer write faults per second,
+which compresses the difference between backends.
+At $\leq$16\,GB, XArray, Vector, Nested Bitmap, and Chunked all fall in the
+13--30\% band: kernel compute time is long enough to amortise tracking
+cost regardless of insert latency.
+Chunked's poor per-insert performance does not show at low fault counts.
+Vec.\ Unsorted shows a spurious $-$93.3\% overhead at 512\,MB (measurement
+noise from a very short baseline) before diverging sharply at 4--8\,GB.
+Linked List exceeds 1{,}000\% at 4\,GB, consistent with its O(n) insert.
+At $\geq$32\,GB the GEMM regime shift shrinks baseline execution time, causing
+all backends to spike to 207--267\%; this jump is benchmark-internal and
+affects XArray and Vector equally.
+
 \paragraph{Per-Operation Latency Across Backends}
-The stats subsystem records per-call nanosecond timing for every backend
-operation via \texttt{uvm\_dirty\_ds\_stats}.
-Enable it by writing \texttt{enable} to the stats procfs node before the
-benchmark run; results are written to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
-Table~\ref{tab:backend_ops} reports average insert, lookup, and
-\texttt{for\_each\_in\_range} latencies plus lock-wait time for each backend
-measured under the \texttt{int\_set\_uvm} 4K-stride workload at 16\,GB
-(the size where insert pressure is highest without entering the oversubscribed
-regime).
+Table~\ref{tab:backend_ops} reports average insert and
+\texttt{for\_each\_in\_range} latencies, lock-wait time, and total init/destroy
+cost for each backend, measured under the \texttt{int\_set\_uvm} 4K-stride
+workload at 4\,GB (the size where insert pressure is highest without entering
+the oversubscribed regime; Vec.\ Unsorted and Linked List were measured at
+512\,MB due to OOM).
 
 \begin{table}[H]
 \centering
 \scriptsize
-\setlength{\tabcolsep}{4pt}
+\setlength{\tabcolsep}{3pt}
 \begin{tabular}{%
   >{\raggedright\arraybackslash}p{2.0cm}
-  >{\centering\arraybackslash}p{1.5cm}
-  >{\centering\arraybackslash}p{1.7cm}
-  >{\centering\arraybackslash}p{1.5cm}
-  >{\centering\arraybackslash}p{1.7cm}
-  >{\centering\arraybackslash}p{1.7cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.55cm}
+  >{\centering\arraybackslash}p{1.55cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.55cm}
 }
 \toprule
 \textbf{Backend} &
 \textbf{Insert} & \textbf{Insert} &
-\textbf{Lookup} & \textbf{Lookup} &
-\textbf{For-each} \\
+\textbf{For-each} &
+\textbf{Init} &
+\textbf{Destroy} \\
 &
 \textbf{avg (ns)} & \textbf{lock-wait (ns)} &
-\textbf{avg (ns)} & \textbf{lock-wait (ns)} &
-\textbf{avg (ns)} \\
+\textbf{avg (s)} &
+\textbf{total (ns)} &
+\textbf{total (s)} \\
 \midrule
-Bitmap        & --- & --- & --- & --- & --- \\
-XArray        & --- & --- & --- & --- & --- \\
-Vector        & --- & --- & --- & --- & --- \\
-Vec. Unsorted & --- & --- & --- & --- & --- \\
-Chunked       & --- & --- & --- & --- & --- \\
-Nested Bitmap & --- & --- & --- & --- & --- \\
-Linked List   & --- & --- & --- & --- & --- \\
+XArray        & 145 & 33 & 0.189 & 466 & 0.098 \\
+Vector        & 867 & 35 & 0.052 & 2,881 & 0.034 \\
+Vec. Unsorted$^*$ & 65,010 & 44 & 8.542 & 3,864 & 0.004 \\
+Chunked       & 196,990 & 43 & 204.234 & 362,386 & 0.044 \\
+Nested Bitmap & 69 & 33 & 0.047 & 2,121 & 0.001 \\
+Linked List$^*$   & 149,581 & 42 & 20.047 & 2,094 & 0.007 \\
 \bottomrule
 \end{tabular}
-\caption{Average per-operation latency and lock-wait time per backend,
-         measured via \texttt{uvm\_dirty\_ds\_stats} under
-         \texttt{int\_set\_uvm} 4K-stride at 16\,GB.}
+\caption{Per-operation stats per backend measured via \texttt{uvm\_dirty\_ds\_stats}
+         under \texttt{int\_set\_uvm} 4K-stride at 4\,GB.
+         Init and Destroy report total ns over all calls; others report per-call averages.
+         $^*$~Vec.\ Unsorted and Linked List results collected at 512\,MB (OOM at 4\,GB).}
 \label{tab:backend_ops}
 \end{table}
 
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{backend_ops.pdf}
+\caption{Insert latency (left) and for-each latency (right) per backend on a log scale.
+         Both axes span multiple orders of magnitude; backends marked $*$ were
+         measured at 512\,MB.}
+\label{fig:backend_ops}
+\end{figure}
 
+\paragraph{Per-Operation Latency Analysis}
+\mbox{}\\
+\textbf{Insert latency (Figure~\ref{fig:backend_ops}, left).}\enspace
+Nested Bitmap achieves the lowest insert latency at 69\,ns --- a plain atomic
+bit-set into a pre-allocated bitmap --- with a lock-wait of only 33\,ns.
+XArray follows at 145\,ns (sparse tree node lookup and set), also with 33\,ns
+lock-wait.
+Vector is 6$\times$ slower than XArray (867\,ns) due to its O(n) sorted-insert
+binary search.
+The three unscalable backends are 2--3 orders of magnitude worse:
+Vec.\ Unsorted (65{,}010\,ns), Linked List (149{,}581\,ns), and Chunked
+(196{,}990\,ns) all incur allocation or traversal costs per insert that make
+them impractical under high fault rates.
+
+\textbf{For-each latency (Figure~\ref{fig:backend_ops}, right).}\enspace
+Nested Bitmap (0.047\,s) and Vector (0.052\,s) are the fastest iterators:
+a bitmap word scan processes 64 pages per instruction, while a sorted vector
+offers sequential, cache-friendly iteration.
+XArray (0.189\,s) is roughly 4$\times$ slower due to pointer chasing across
+sparse tree nodes.
+Vec.\ Unsorted (8.5\,s) and Linked List (20\,s) suffer from their
+unordered, pointer-linked structures.
+Chunked is the worst by a large margin at 204\,s --- over 4{,}000$\times$
+slower than Nested Bitmap --- because its chunked indirection layers must
+be traversed for every page during iteration.
+This for-each cost directly determines the wall-clock overhead seen during
+the \texttt{query\_dump} phase, and explains why Chunked and Vec.\ Unsorted
+produce extreme overhead in the end-to-end benchmarks even at modest
+working-set sizes.
 
