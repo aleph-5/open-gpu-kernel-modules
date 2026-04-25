@@ -190,7 +190,8 @@ The files containing functionality added or significantly modified by us are:
           \texttt{uvm\_dirty\_page\_table\_destroy}), fault recording
           (\texttt{uvm\_dirty\_page\_table\_record}), snapshot management
           (\texttt{uvm\_dirty\_new\_snapshot}, \texttt{uvm\_dirty\_merge\_snapshot\_into\_cumulative\_locked}),
-          and all eight \texttt{procfs} handler implementations including
+          user hints to select the data structure backend (\texttt{dirty\_tracking\_hint\_write}),
+          and all nine \texttt{procfs} handler implementations including
           \texttt{uvm\_dirty\_procfs\_init}.
           Exports function pointers (\texttt{uvm\_dirty\_invalidate\_fn},
           \texttt{uvm\_dirty\_activate\_now\_fn}, \texttt{uvm\_dirty\_barrier\_end\_fn},
@@ -356,7 +357,16 @@ Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
           Read-only statistics snapshot for the current session.\\
           Reports operation counts and average latency for
           init/insert/lookup/for-each/destroy, average lock-wait components,
-          and callback timing for invalidate, activate-now, and barrier-end.
+          and callback timing for invalidate, activate-now, and barrier-end.\\
+
+    \item \textbf{\texttt{dirty\_tracking\_hint} (write)}\\
+          Input: \texttt{"WRITE\_SEQ"} or \texttt{"WRITE\_RAND"}\\
+          Switches the data structure backend between \texttt{uvm\_dirty\_ds\_vector}
+          when the input is \texttt{WRITE\_SEQ} and \texttt{uvm\_dirty\_ds\_nested\_bitmap} 
+          when the input is \texttt{WRITE\_RAND}. Since the vector gives better performance
+          for sequential writes and the nested bitmap gives better performance 
+          for random writes, this allows users to select the best backend for their workload.\\
+      
 \end{enumerate}
 
 \subsection*{Design Choices}

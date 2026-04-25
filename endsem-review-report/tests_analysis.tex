@@ -87,7 +87,8 @@ The suites are intended to cover the following categories
           \\Tests error handling on invalid procfs interactions: double \texttt{start},
           \texttt{stop} without \texttt{start}, stopping with a wrong PID,
           malformed input strings, double cutover without an intervening dump,
-          and cutover or dump without an active session.
+          cutover or dump without an active session and changing the hint during
+          an active tracking session.\\
           All calls must return well-defined errors without crashing or corrupting
           driver state.
 
@@ -118,6 +119,12 @@ The suites are intended to cover the following categories
           stress, and that two independent allocations tracked in one session
           both appear correctly in the dump.
 
+    \item \textbf{\texttt{tracking\_hints}}
+          \\Tests the hint interface for selecting the data structure backend,
+          verifies that on using either hint, the output is consistent with the
+          expected one, and that switching hits bwtween sessions does not interfere
+          with the tracking state.
+
     \item \textbf{\texttt{generic}}
           \\A broad integration suite covering the core procfs interface
           (\texttt{dirty\_tracking\_start/stop/query\_cutover/query\_dump}).
@@ -132,7 +139,7 @@ The suites are intended to cover the following categories
 \paragraph{Observations}
 The tests were run as root, and the current implementation passed every test
 that is present in the repository. The aggregate result was
-\textbf{69/69 passed}: 
+\textbf{74/74 passed}: 
 \texttt{table\_lifecycle} 5/5,
 \texttt{ordering} 8/8, 
 \texttt{determinism} 2/2,
@@ -142,10 +149,11 @@ that is present in the repository. The aggregate result was
 \texttt{access\_type\_filtering} 4/4,
 \texttt{snapshot\_isolation} 4/4,
 \texttt{backend\_correctness} 9/9,
-\texttt{procfs\_robustness} 6/6,
+\texttt{procfs\_robustness} 8/8,
 \texttt{lifecycle\_races} 7/7,
 \texttt{scale} 4/4,
 \texttt{stats\_accuracy} 4/4,
+\texttt{tracking\_hints} 3/3,
 and the \texttt{generic} suite 12/12. The per-test
 runners for the suites report runtimes between 1.95\,s and 3.05\,s.
 
@@ -234,6 +242,8 @@ Procfs Robustness & \texttt{tc03\_wrong\_pid\_stop} & Wrong-PID stop returns err
 Procfs Robustness & \texttt{tc04\_malformed\_start\_write} & Malformed start strings return EINVAL & PASS & 1.99s \\
 Procfs Robustness & \texttt{tc05\_double\_cutover\_no\_dump} & Second cutover returns EBUSY; snapshot preserved & PASS & 1.99s \\
 Procfs Robustness & \texttt{tc06\_cutover\_without\_start} & Cutover/dump without active session return errors & PASS & 2.01s \\
+Procfs Robustness & \texttt{tc07\_hint\_invalid\_input} & Invalid hint input returns EINVAL & PASS & 2.01s \\
+Procfs Robustness & \texttt{tc08\_hint\_busy\_during\_tracking} & Trying to write to \texttt{dirty\_tracking\_active} during tracking returns EBUSY & PASS & 2.03s \\
 \midrule
 
 Lifecycle Races & \texttt{tc01\_stop\_while\_kernel\_running} & \texttt{stop} during active GPU write does not crash & PASS & 1.99s \\
@@ -260,6 +270,11 @@ Stats Accuracy & \texttt{tc04\_stats\_disabled\_by\_default} & Stats disabled by
 Footprint Clearing & \texttt{tc01\_rw\_restored\_after\_stop} & Pre-tracking RW pages restored to RW after stop & PASS & 1.99s \\
 Footprint Clearing & \texttt{tc02\_fresh\_pages\_still\_fault} & Unmapped pages not spuriously granted RW on stop & PASS & 2.02s \\
 Footprint Clearing & \texttt{tc03\_idempotent\_cycles} & Multiple start/stop cycles each leave pages in RW state & PASS & 1.95s \\
+\midrule
+
+Tracking Hints & \texttt{tc01\_hint\_seq\_session} & Giving hint as \texttt{WRITE\_SEQ} all the writes are recorded & PASS & 2.00s \\
+Tracking Hints & \texttt{tc02\_hint\_rand\_session} & Giving hint as \texttt{WRITE\_RAND} all the writes are recorded & PASS & 1.98s \\
+Tracking Hints & \texttt{tc03\_hint\_switch\_between\_sessions} & Switching hints in between tracking sessions does not raise any errors & PASS & 1.97s \\
 \midrule
 
 Generic & \texttt{test\_dirty\_tracking\_suite} & Integration smoke test covering all core behaviors & PASS & 2.02s \\
