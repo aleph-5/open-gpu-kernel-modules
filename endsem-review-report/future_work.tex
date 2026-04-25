@@ -1,1 +1,75 @@
 \section*{Future Work}
+
+\subsection*{Program Analysis for Backend Selection and Overhead Reduction}
+
+The largest overhead driver is the number of write faults fired per unit of
+work, which is determined entirely by each kernel's memory access pattern.
+The existing \texttt{dirty\_tracking\_hint} procfs entry already lets an
+operator select between sequential (sorted-vector) and random (nested-bitmap)
+backends before a session, but the selection is manual.
+
+A natural extension is to derive the hint automatically by analysing the compiled
+PTX of each kernel.
+Store instructions (\texttt{st.*}) carry address operands whose computation
+reveals the access pattern: a unit-stride expression where adjacent threads write
+adjacent addresses signals sequential access; irregular or data-dependent address
+arithmetic signals random access.
+This classification feeds directly into the existing hint dispatch, eliminating
+operator involvement.
+
+Beyond backend selection, alias analysis on the NVVM IR (LLVM dialect emitted
+before device linking) can identify which kernel arguments are derived from
+\texttt{cudaMallocManaged} pointers.
+At \texttt{start} and \texttt{resume}, only VA blocks reachable through those
+arguments need their write permissions revoked.
+The current implementation walks the entire owner VA space and calls
+\texttt{uvm\_va\_block\_revoke\_prot\_mask} on every mapped block; restricting
+this walk to write-reachable blocks reduces the downgrade barrier latency
+proportionally to the fraction of the address space that is actually written.
+This is most valuable at large working-set sizes (32-64\,GB) where the
+downgrade walk is a non-trivial fraction of \texttt{start}/\texttt{resume}
+latency.
+
+\subsection*{Migration Policy for the Oversubscribed Regime}
+
+In the oversubscribed regime the GPU's on-device memory is exhausted and UVM
+evicts pages to host DRAM using an LRU policy that has no knowledge of write
+intensity.
+The dirty tracking data already produced by the existing implementation is
+sufficient to improve several aspects of this policy.
+
+\paragraph{Write-heat aware eviction}
+In cumulative tracking mode, the dump accumulates which pages have been dirtied
+across multiple epochs.
+A page that appears dirty in every epoch is rewritten every time it enters GPU
+memory; evicting it immediately triggers a re-fault.
+A page absent from the dirty set for several epochs is effectively read-only
+and can be evicted without a write-back.
+Adding an epoch-frequency counter per VA block, maintained by user space
+from successive dump outputs, and using it to bias UVM's eviction candidate
+scoring would keep write-hot pages on-device longer and preferentially evict
+clean pages, reducing re-fault frequency under memory pressure.
+
+\paragraph{Cutover timing for iterative migration}
+In iterative pre-copy live migration, the migration controller issues
+\texttt{query\_cutover} to snapshot the dirty set and then transfers those
+pages to the destination.
+Convergence requires that the re-dirty rate during transfer is lower than the
+transfer bandwidth.
+The nanosecond-resolution timestamps in the dump make the write rate directly
+observable: the density of timestamps over the epoch's duration gives an estimate
+of faults per second.
+A migration controller that reads the insert count from \texttt{dirty\_ds\_stats}
+in real time can defer \texttt{query\_cutover} until the observed write rate
+drops below available transfer bandwidth, improving round-trip convergence
+without any additional kernel instrumentation.
+
+\paragraph{Dirty ratio as a scheduling signal}
+After each dump, the number of output lines divided by the total managed
+allocation size gives the fraction of pages dirtied in that epoch.
+When this ratio is low the workload is in a read-intensive phase and migration
+rounds can be scheduled more aggressively; when it is high the workload is
+producing large dirty sets and extending the inter-round interval allows it to
+reach a quieter phase before the next cutover.
+This feedback loop is entirely implementable in user space using the existing
+procfs interface.
