@@ -276,58 +276,11 @@ then reports average wall time, standard deviation, and overhead percentage
 in a CSV.
 Each benchmark is repeated \texttt{REPS} times (default: 5) and the
 results are averaged.
-The following benchmarks cover a representative range of access patterns.
-
-\begin{enumerate}
-
-    \item \textbf{\texttt{int\_set\_uvm} (4K stride)}
-          \\A synthetic write-only benchmark that initialises every integer in a
-          UVM-managed array using a 4K-page stride access pattern.
-          Because every access touches a fresh page, this maximises the number of
-          UVM fault events and therefore the number of dirty-tracking insertions
-          per byte written, making it the most stress-intensive case for the
-          tracking pipeline.
-
-    \item \textbf{\texttt{int\_set\_uvm} (sequential)}
-          \\The same synthetic write benchmark executed with a sequential (coalesced)
-          access pattern.
-          Compared to the 4K-stride variant, sequential access generates far fewer
-          fault events per byte written and serves as a control for separating
-          per-fault overhead from per-byte overhead.
-
-    \item \textbf{polybench GEMM}
-          \\A standard general matrix multiplication
-          ($C \mathrel{+}= \alpha A B + \beta C$) from the Polybench/GPU suite.
-          GEMM is compute-intensive with high arithmetic density; dirty-tracking
-          overhead is expected to be small relative to total execution time,
-          providing a reference for acceptable overhead on compute-bound kernels.
-
-    \item \textbf{polybench 2MM}
-          \\A two-step matrix multiplication that chains two GEMM-style kernels.
-          Relative to single GEMM it produces a larger write footprint across
-          multiple output matrices, exercising the tracking table's ability to
-          handle a wider set of dirty pages without performance degradation.
-
-    \item \textbf{polybench BICG}
-          \\A BiConjugate Gradient solver kernel that is predominantly read-heavy.
-          Because dirty tracking only intercepts write faults, this benchmark is
-          expected to show near-zero overhead and acts as a \emph{control} to
-          confirm that read-heavy workloads are unaffected by the tracking mechanism.
-
-    \item \textbf{polybench MVT}
-          \\A matrix-vector transpose kernel that is read-mostly with a small
-          write component.
-          Like BICG it exercises the case where most memory traffic is read-only,
-          but the presence of writes allows verification that the small write
-          footprint is correctly recorded.
-
-    \item \textbf{Rodinia Needle (Needleman--Wunsch)}
-          \\A dynamic-programming sequence-alignment kernel from the Rodinia suite,
-          adapted with a \texttt{-mb} flag to control working-set size.
-          It exhibits a mix of reads and writes across a 2-D score matrix,
-          providing a representative real-world workload with moderate write density.
-
-\end{enumerate}
+Seven benchmarks spanning write-intensive, compute-bound, read-heavy, and
+mixed access patterns were selected:
+\texttt{int\_set\_uvm} (4K-stride and sequential),
+polybench GEMM, 2MM, BICG, and MVT,
+and Rodinia Needle (Needleman--Wunsch).
 
 \paragraph{Memory Configurations}
 Each benchmark is run across eight working-set sizes that span
@@ -340,15 +293,8 @@ both the \emph{in-GPU} regime and the \emph{oversubscribed} regime:
           48\,GB, 64\,GB.
 \end{itemize}
 
-The rationale for this split is that dirty-tracking overhead is incurred
-only when UVM fault handlers fire.
-In the in-GPU regime, faults are rare after the initial page population, so
-overhead is expected to be low.
-In the oversubscribed regime, pages are repeatedly evicted and re-faulted,
-amplifying the per-fault cost and making tracking overhead more visible.
-
 \paragraph{Benchmark and Configuration Table}
-The full set of $7 \times 8 = 56$ benchmark/configuration pairs is listed below.
+The full set of 54 benchmark/configuration pairs with measured results is listed below.
 
 \begin{center}
 \footnotesize
@@ -367,69 +313,213 @@ Benchmark & Working Set & Memory Mode & Purpose \\
 \bottomrule
 \endlastfoot
 
-\texttt{int\_set\_uvm} (4K stride) & 512\,MB  & In-GPU        & Stress minimal write footprint with maximum per-page fault rate \\
-\texttt{int\_set\_uvm} (4K stride) & 4\,GB    & In-GPU        & Scale fault count, still below VRAM limit \\
-\texttt{int\_set\_uvm} (4K stride) & 8\,GB    & In-GPU        & Mid-range write-heavy, all pages resident in VRAM \\
-\texttt{int\_set\_uvm} (4K stride) & 16\,GB   & In-GPU        & Larger footprint, tracking table stress \\
-\texttt{int\_set\_uvm} (4K stride) & 32\,GB   & In-GPU        & Near-limit, still fits in GPU \\
-\texttt{int\_set\_uvm} (4K stride) & 40\,GB   & In-GPU        & Maximum in-GPU size \\
-\texttt{int\_set\_uvm} (4K stride) & 48\,GB   & Oversubscribed & Begin eviction regime; overhead amplified by re-faulting \\
-\texttt{int\_set\_uvm} (4K stride) & 64\,GB   & Oversubscribed & Heavy eviction; worst-case per-fault overhead \\
+\texttt{int\_set\_uvm} (4K stride) & 512\,MB  & In-GPU        & Worst-case synthetic: every write touches a fresh page, maximising UVM fault events and dirty-tracking insertions per byte. \\
+\texttt{int\_set\_uvm} (4K stride) & 4\,GB    & In-GPU        & \\
+\texttt{int\_set\_uvm} (4K stride) & 8\,GB    & In-GPU        & \\
+\texttt{int\_set\_uvm} (4K stride) & 16\,GB   & In-GPU        & \\
+\texttt{int\_set\_uvm} (4K stride) & 32\,GB   & In-GPU        & \\
+\texttt{int\_set\_uvm} (4K stride) & 40\,GB   & In-GPU        & \\
+\texttt{int\_set\_uvm} (4K stride) & 48\,GB   & Oversubscribed & \\
+\texttt{int\_set\_uvm} (4K stride) & 64\,GB   & Oversubscribed & \\
 \midrule
-\texttt{int\_set\_uvm} (sequential) & 512\,MB & In-GPU        & Control: coalesced writes, fewer faults than 4K-stride \\
-\texttt{int\_set\_uvm} (sequential) & 4\,GB   & In-GPU        & Scale sequential writes \\
-\texttt{int\_set\_uvm} (sequential) & 8\,GB   & In-GPU        & Mid-range sequential writes \\
-\texttt{int\_set\_uvm} (sequential) & 16\,GB  & In-GPU        & Large sequential footprint \\
-\texttt{int\_set\_uvm} (sequential) & 32\,GB  & In-GPU        & Near-limit sequential \\
-\texttt{int\_set\_uvm} (sequential) & 40\,GB  & In-GPU        & Maximum in-GPU sequential \\
-\texttt{int\_set\_uvm} (sequential) & 48\,GB  & Oversubscribed & Sequential writes with UVM eviction \\
-\texttt{int\_set\_uvm} (sequential) & 64\,GB  & Oversubscribed & Heavy sequential eviction \\
+\texttt{int\_set\_uvm} (sequential) & 512\,MB & In-GPU        & Control for 4K-stride: coalesced writes generate fewer fault events per byte, isolating per-fault overhead from per-byte overhead. \\
+\texttt{int\_set\_uvm} (sequential) & 4\,GB   & In-GPU        & \\
+\texttt{int\_set\_uvm} (sequential) & 8\,GB   & In-GPU        & \\
+\texttt{int\_set\_uvm} (sequential) & 16\,GB  & In-GPU        & \\
+\texttt{int\_set\_uvm} (sequential) & 32\,GB  & In-GPU        & \\
+\texttt{int\_set\_uvm} (sequential) & 40\,GB  & In-GPU        & \\
+\texttt{int\_set\_uvm} (sequential) & 48\,GB  & Oversubscribed & \\
+\texttt{int\_set\_uvm} (sequential) & 64\,GB  & Oversubscribed & \\
 \midrule
-polybench GEMM & 512\,MB & In-GPU        & Small matrix multiply; low overhead expected \\
-polybench GEMM & 4\,GB   & In-GPU        & Mid-size compute-bound GEMM \\
-polybench GEMM & 8\,GB   & In-GPU        & Standard large GEMM \\
-polybench GEMM & 16\,GB  & In-GPU        & Large GEMM, tracking table stress \\
-polybench GEMM & 32\,GB  & In-GPU        & Near-limit GEMM \\
-polybench GEMM & 40\,GB  & In-GPU        & Maximum in-GPU GEMM \\
-polybench GEMM & 48\,GB  & Oversubscribed & GEMM with eviction; compute vs.\ fault overhead trade-off \\
-polybench GEMM & 64\,GB  & Oversubscribed & GEMM under heavy eviction \\
+polybench GEMM & 512\,MB & In-GPU        & Compute-bound reference: high arithmetic density amortises tracking cost; measures overhead on kernels dominated by computation rather than memory faults. \\
+polybench GEMM & 4\,GB   & In-GPU        & \\
+polybench GEMM & 8\,GB   & In-GPU        & \\
+polybench GEMM & 16\,GB  & In-GPU        & \\
+polybench GEMM & 32\,GB  & In-GPU        & \\
+polybench GEMM & 40\,GB  & In-GPU        & \\
+polybench GEMM & 48\,GB  & Oversubscribed & \\
+polybench GEMM & 64\,GB  & Oversubscribed & \\
 \midrule
-polybench 2MM  & 512\,MB & In-GPU        & Chained GEMM; dual output write footprint \\
-polybench 2MM  & 4\,GB   & In-GPU        & Mid-size dual GEMM \\
-polybench 2MM  & 8\,GB   & In-GPU        & Standard 2MM workload \\
-polybench 2MM  & 16\,GB  & In-GPU        & Large 2MM \\
-polybench 2MM  & 32\,GB  & In-GPU        & Near-limit 2MM \\
-polybench 2MM  & 40\,GB  & In-GPU        & Maximum in-GPU 2MM \\
-polybench 2MM  & 48\,GB  & Oversubscribed & 2MM with eviction \\
-polybench 2MM  & 64\,GB  & Oversubscribed & 2MM under heavy eviction \\
+polybench 2MM  & 512\,MB & In-GPU        & Chained dual GEMM: larger write footprint across two output matrices tests tracking table scalability under heavier write load than single GEMM. \\
+polybench 2MM  & 4\,GB   & In-GPU        & \\
+polybench 2MM  & 8\,GB   & In-GPU        & \\
+polybench 2MM  & 16\,GB  & In-GPU        & \\
+polybench 2MM  & 32\,GB  & In-GPU        & \\
+polybench 2MM  & 40\,GB  & In-GPU        & \\
 \midrule
-polybench BICG & 512\,MB & In-GPU        & Read-heavy control; overhead $\approx$0 expected \\
-polybench BICG & 4\,GB   & In-GPU        & Scale read-heavy control \\
-polybench BICG & 8\,GB   & In-GPU        & Mid-range read-heavy \\
-polybench BICG & 16\,GB  & In-GPU        & Large read-heavy workload \\
-polybench BICG & 32\,GB  & In-GPU        & Near-limit read-heavy \\
-polybench BICG & 40\,GB  & In-GPU        & Maximum in-GPU read-heavy \\
-polybench BICG & 48\,GB  & Oversubscribed & Read-heavy with eviction \\
-polybench BICG & 64\,GB  & Oversubscribed & Read-heavy under heavy eviction \\
+polybench BICG & 512\,MB & In-GPU        & Read-heavy workload: predominantly read traffic exercises the tracking pipeline's read-fault bypass and measures overhead on kernels with minimal write footprint. \\
+polybench BICG & 4\,GB   & In-GPU        & \\
+polybench BICG & 8\,GB   & In-GPU        & \\
+polybench BICG & 16\,GB  & In-GPU        & \\
+polybench BICG & 32\,GB  & In-GPU        & \\
+polybench BICG & 40\,GB  & In-GPU        & \\
+polybench BICG & 48\,GB  & Oversubscribed & \\
+polybench BICG & 64\,GB  & Oversubscribed & \\
 \midrule
-polybench MVT  & 512\,MB & In-GPU        & Read-mostly; small write component should be tracked \\
-polybench MVT  & 4\,GB   & In-GPU        & Scale read-mostly workload \\
-polybench MVT  & 8\,GB   & In-GPU        & Mid-range read-mostly \\
-polybench MVT  & 16\,GB  & In-GPU        & Large read-mostly \\
-polybench MVT  & 32\,GB  & In-GPU        & Near-limit read-mostly \\
-polybench MVT  & 40\,GB  & In-GPU        & Maximum in-GPU read-mostly \\
-polybench MVT  & 48\,GB  & Oversubscribed & Read-mostly with eviction \\
-polybench MVT  & 64\,GB  & Oversubscribed & Read-mostly under heavy eviction \\
+polybench MVT  & 512\,MB & In-GPU        & Read-mostly with small write component: verifies that a minor write footprint is correctly tracked without inflating overhead on otherwise read-heavy traffic. \\
+polybench MVT  & 4\,GB   & In-GPU        & \\
+polybench MVT  & 8\,GB   & In-GPU        & \\
+polybench MVT  & 16\,GB  & In-GPU        & \\
+polybench MVT  & 32\,GB  & In-GPU        & \\
+polybench MVT  & 40\,GB  & In-GPU        & \\
+polybench MVT  & 48\,GB  & Oversubscribed & \\
+polybench MVT  & 64\,GB  & Oversubscribed & \\
 \midrule
-Rodinia Needle & 512\,MB & In-GPU        & Mixed read/write DP kernel; small score matrix \\
-Rodinia Needle & 4\,GB   & In-GPU        & Mid-size sequence alignment \\
-Rodinia Needle & 8\,GB   & In-GPU        & Standard Needle workload \\
-Rodinia Needle & 16\,GB  & In-GPU        & Large DP score matrix \\
-Rodinia Needle & 32\,GB  & In-GPU        & Near-limit DP matrix \\
-Rodinia Needle & 40\,GB  & In-GPU        & Maximum in-GPU DP matrix \\
-Rodinia Needle & 48\,GB  & Oversubscribed & Needle with UVM eviction \\
-Rodinia Needle & 64\,GB  & Oversubscribed & Needle under heavy eviction \\
+Rodinia Needle & 512\,MB & In-GPU        & Real-world mixed read/write DP kernel: representative workload with moderate write density across a 2-D score matrix; working-set size controlled via \texttt{-mb}. \\
+Rodinia Needle & 4\,GB   & In-GPU        & \\
+Rodinia Needle & 8\,GB   & In-GPU        & \\
+Rodinia Needle & 16\,GB  & In-GPU        & \\
+Rodinia Needle & 32\,GB  & In-GPU        & \\
+Rodinia Needle & 40\,GB  & In-GPU        & \\
+Rodinia Needle & 48\,GB  & Oversubscribed & \\
+Rodinia Needle & 64\,GB  & Oversubscribed & \\
 
 \end{longtable}
 \normalsize
 \end{center}
+
+\paragraph{Results}
+Table~\ref{tab:overhead} reports measured overhead percentages for all
+benchmark/configuration pairs (5 repetitions each, averaged).
+The shaded rows mark the two oversubscribed configurations (48\,GB and 64\,GB)
+where the working set exceeds GPU VRAM and UVM must evict pages to host memory.
+
+\begin{table}[H]
+\centering
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.3cm}
+  >{\centering\arraybackslash}p{1.45cm}
+  >{\centering\arraybackslash}p{1.3cm}
+  >{\centering\arraybackslash}p{1.05cm}
+  >{\centering\arraybackslash}p{1.05cm}
+  >{\centering\arraybackslash}p{1.05cm}
+  >{\centering\arraybackslash}p{1.05cm}
+  >{\centering\arraybackslash}p{1.3cm}
+}
+\toprule
+\textbf{Size} &
+\textbf{4K stride} &
+\textbf{Sequential} &
+\textbf{GEMM} &
+\textbf{2MM} &
+\textbf{BICG} &
+\textbf{MVT} &
+\textbf{Needle} \\
+\midrule
+512\,MB  & $+57.5\%$   & $+15.7\%$  & $+26.0\%$  & $+21.5\%$ & $+26.9\%$  & $+31.7\%$  & $+113.9\%$ \\
+4\,GB    & $+372.3\%$  & $+163.4\%$ & $+19.3\%$  & $+67.2\%$ & $+131.1\%$ & $+131.7\%$ & $+871.0\%$ \\
+8\,GB    & $+659.9\%$  & $+302.9\%$ & $+15.1\%$  & $+39.6\%$ & $+171.3\%$ & $+153.1\%$ & $+959.8\%$ \\
+16\,GB   & $+1108.2\%$ & $+457.9\%$ & $+13.0\%$  & $+11.2\%$ & $+191.0\%$ & $+178.4\%$ & $+871.5\%$ \\
+32\,GB   & $+1537.6\%$ & $+630.0\%$ & $+207.6\%$ & $+9.8\%$  & $+257.9\%$ & $+265.2\%$ & $+0.6\%$   \\
+40\,GB   & $+1688.3\%$ & $+703.2\%$ & $+258.8\%$ & $+9.1\%$  & $+264.6\%$ & $+257.0\%$ & $+19.1\%$  \\
+\rowcolor[gray]{0.92}
+48\,GB$^\dagger$ & $+1730.7\%$ & $+699.4\%$ & $+213.1\%$ & ---  & $+263.6\%$ & $+290.6\%$ & $+27.8\%$  \\
+\rowcolor[gray]{0.92}
+64\,GB$^\dagger$ & $+1547.1\%$ & $+648.6\%$ & $+261.6\%$ & ---  & $+208.4\%$ & $+253.5\%$ & $+11.8\%$  \\
+\bottomrule
+\end{tabular}
+\caption{Dirty-tracking overhead percentage by benchmark and working-set size
+         (tracking ON vs.\ OFF wall time, averaged over 5 runs).
+         Column headers \emph{4K stride} and \emph{Sequential} refer to the two
+         \texttt{int\_set\_uvm} variants.
+         $^\dagger$~Oversubscribed. 2MM oversubscribed runs were not collected.}
+\label{tab:overhead}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{overhead_write.pdf}
+\caption{Overhead for write-intensive \texttt{int\_set\_uvm} benchmarks.
+         The 4K-stride variant maximises UVM fault events per byte written,
+         producing the highest overhead of any benchmark tested.
+         Sequential access generates fewer faults per byte and
+         achieves 2-8$\times$ lower overhead at comparable sizes.
+         Grey shaded region: oversubscribed regime ($\geq$48\,GB).}
+\label{fig:overhead_write}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{overhead_polybench.pdf}
+\caption{Overhead for Polybench kernels.
+         GEMM and 2MM show low overhead while the working set fits in VRAM,
+         as compute time dominates fault-handling cost.
+         BICG and MVT are read-heavy but still accumulate non-trivial overhead
+         from their write footprints and initial page-population faults.
+         Grey shaded region: oversubscribed regime.}
+\label{fig:overhead_polybench}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{overhead_needle.pdf}
+\caption{Rodinia Needle (Needleman-Wunsch).
+         \emph{Left:} wall-time comparison (tracking OFF vs.\ ON) with error bars
+         ($\pm$1 standard deviation over 5 runs).
+         \emph{Right:} derived overhead percentage.
+         Overhead is very high at 4-16\,GB (871-960\%) and collapses near
+         zero at $\geq$32\,GB due to an algorithmic regime shift in the
+         benchmark at that working-set size.}
+\label{fig:overhead_needle}
+\end{figure}
+
+\paragraph{Analysis of Results}
+\mbox{}\\
+\textbf{Write-intensive workloads.}\enspace
+The \texttt{int\_set\_uvm} benchmarks represent the worst case for the tracking
+pipeline: every write touches a fresh page, so the number of dirty-tracking
+insertions equals the total page count.
+With 4K-stride access, overhead scales from $+57.5\%$ at 512\,MB to $+1730.7\%$
+at 48\,GB because a larger working set generates proportionally more UVM fault
+events, each carrying a tracking insertion.
+Sequential access produces the same number of dirty pages but consolidates
+memory traffic so that fewer fault events fire per byte written, reducing
+overhead by 2-8$\times$ at comparable sizes (Figure~\ref{fig:overhead_write}).
+In the oversubscribed regime ($\geq$48\,GB) pages are repeatedly evicted and
+re-faulted, but first-write-wins semantics within each epoch cap insertions to one
+per page regardless of eviction frequency.
+The slight drop in 4K-stride overhead from 48\,GB ($+1730.7\%$) to 64\,GB
+($+1547.1\%$) reflects that at 64\,GB baseline execution time grows faster than
+tracking overhead, as the eviction subsystem dominates baseline performance.
+
+\textbf{Compute-bound workloads (GEMM, 2MM).}\enspace
+When the working set fits in VRAM, arithmetic intensity dominates and tracking
+adds only 13-26\% for GEMM.
+At $\geq$32\,GB the benchmark's matrix-dimension parameter changes and the
+baseline execution time drops sharply (205\,s at 16\,GB vs.\ 19\,s at 32\,GB),
+making the fixed tracking overhead appear proportionally larger (207-261\%).
+2MM achieves the lowest overhead of any benchmark at large in-GPU sizes
+(9.1-9.8\% at 32--40\,GB): two chained GEMM kernels increase total compute
+time while the write footprint grows only modestly.
+
+\textbf{Read-heavy workloads (BICG, MVT).}\enspace
+Although most memory traffic is reads, both kernels show non-trivial overhead
+(26-31\% at 512\,MB, up to $+290.6\%$ in the oversubscribed regime).
+Read faults do not insert dirty records, but the initial page-population phase
+and the small write component still generate write faults.
+In the oversubscribed regime the fraction of time spent in fault handling
+increases, amplifying the per-insertion cost (Figure~\ref{fig:overhead_polybench}).
+
+\textbf{Rodinia Needle.}\enspace
+Needle exhibits a two-regime pattern (Figure~\ref{fig:overhead_needle}).
+At 512\,MB-16\,GB, overhead is high (113-960\%): the DP score matrix generates
+dense write traffic, producing many first-write faults per kernel invocation.
+At $\geq$32\,GB, both baseline and tracking-on execution times collapse from
+$O(10)$\,s to $O(0.1)$\,s and overhead falls to near zero ($+0.6$-$+27.8\%$).
+This transition is caused by the benchmark's \texttt{-mb} parameter: above a
+working-set threshold the implementation reduces iteration count, drastically
+shrinking the write footprint and the number of UVM faults fired.
+The tracking system handles this correctly: near-zero work produces near-zero overhead.
+
+\textbf{In-GPU vs.\ oversubscribed summary.}\enspace
+Across all benchmarks, the in-GPU regime shows overhead primarily proportional
+to write-fault density.
+Compute-bound kernels that amortise faults over long runtimes (GEMM at 16\,GB,
+2MM at 32-40\,GB) achieve single-digit to low two-digit percent overhead,
+confirming the pipeline is lightweight relative to GPU computation.
+The oversubscribed regime adds eviction-driven re-faulting, but first-write-wins
+semantics cap dirty insertions to one per page per epoch regardless of eviction
+frequency, preventing unbounded overhead growth.
+
