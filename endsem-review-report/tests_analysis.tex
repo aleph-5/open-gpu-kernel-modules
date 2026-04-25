@@ -8,14 +8,14 @@ The testing and analysis was done in two parts
 
 \subsection*{Correctness Testing}
 The correctness was evaluated using CUDA tests under \texttt{correctness\_tests}.
-The suites are intended to cover the following categories
+The suites are intended to cover the following categories :
 \begin{enumerate}
 
     \item \textbf{\texttt{access\_type\_filtering}}
           \\Tests that only writes (including atomic read-modify-write operations) are
           recorded as dirty, while pure reads leave no trace.
           Also verifies that prefetched pages are properly tracked and that distinct
-          access types to the same page are correctly de-duplicated.
+          access types to the same page are correctly de-duplicated.\\
 
     \item \textbf{\texttt{address\_range\_filtering}}
           \\Verifies that dirty tracking correctly isolates multiple non-contiguous
@@ -24,7 +24,7 @@ The suites are intended to cover the following categories
           sub-page granularity.
           Also tests that inverted or zero-length range arguments do not suppress
           entries, and that pages whose PTEs were established before \texttt{start\_track}
-          are still captured when written after tracking begins.
+          are still captured when written after tracking begins.\\
 
     \item \textbf{\texttt{backend\_correctness}}
           \\Validates fundamental invariants of the tracking system,
@@ -33,7 +33,7 @@ The suites are intended to cover the following categories
           epochs must be non-decreasing.
           Also verifies that freeing an allocation does not erase its tracking records,
           a page allocated after tracking is still tracked, 
-          and that empty epochs between writes yield empty dumps.
+          and that empty epochs between writes yield empty dumps.\\
 
     \item \textbf{\texttt{cumulative\_mode}}
           \\Confirms that cumulative mode accumulates pages across epochs (all pages
@@ -41,7 +41,7 @@ The suites are intended to cover the following categories
           re-writing an already-tracked page does not create a duplicate or update
           its timestamp (first-write-wins semantics hold across epochs).
           A stop/restart in delta mode is also verified to reset the tracking state
-          completely.
+          completely.\\
 
     \item \textbf{\texttt{determinism}}
           \\Tests the cutover border: pages written before cutover must appear
@@ -49,7 +49,7 @@ The suites are intended to cover the following categories
           two write phases are interleaved closely in time.
           Also tests pause/resume semantics, verifying that writes issued during a
           pause are not recorded and that tracking resumes cleanly after
-          \texttt{resume\_track}.
+          \texttt{resume\_track}.\\
 
     \item \textbf{\texttt{first\_write\_wins}}
           \\Verifies the \textit{first write wins policy}, re-writing the same page must
@@ -57,7 +57,7 @@ The suites are intended to cover the following categories
           This is tested both for sequential re-writes and for 64 concurrent CUDA
           streams racing to write the same page simultaneously.
           Also confirms that after cutover (without PTE re-invalidation), a second
-          write to the same page does not re-appear in the next epoch.
+          write to the same page does not re-appear in the next epoch.\\
 
     \item \textbf{\texttt{footprint\_clearing}}
           \\Checks that stopping tracking fully restores page permissions:
@@ -65,7 +65,7 @@ The suites are intended to cover the following categories
           and pages that had no prior GPU mapping
           must not be spuriously granted READ\_WRITE on stop.
           Since there is no user space API to verify this this is done via write latency.
-          Idempotency across multiple consecutive start/stop cycles is also verified.
+          Idempotency across multiple consecutive start/stop cycles is also verified.\\
 
     \item \textbf{\texttt{lifecycle\_races}}
           \\Stress-tests concurrent and destructive lifecycle transitions:
@@ -73,7 +73,7 @@ The suites are intended to cover the following categories
           two processes attempting simultaneous tracking (second must get
           \texttt{EBUSY}), owner process death (next process must recover cleanly),
           \texttt{stop} while a dump is being read, \texttt{pause} with in-flight
-          faults, and \texttt{resume} correctly re-downgrading PTEs.
+          faults, and \texttt{resume} correctly re-downgrading PTEs.\\
 
     \item \textbf{\texttt{ordering}}
           \\Validates temporal ordering guarantees, writes before \texttt{start\_track}
@@ -81,7 +81,7 @@ The suites are intended to cover the following categories
           non-decreasing, queries in cumulative mode must be non-destructive, and
           epoch isolation must hold.
           Also tests concurrent CUDA streams and high-volume sentinel/flood write
-          patterns to verify timestamp ordering under load.
+          patterns to verify timestamp ordering under load.\\
 
     \item \textbf{\texttt{procfs\_robustness}}
           \\Tests error handling on invalid procfs interactions: double \texttt{start},
@@ -90,34 +90,34 @@ The suites are intended to cover the following categories
           cutover or dump without an active session and changing the hint during
           an active tracking session.\\
           All calls must return well-defined errors without crashing or corrupting
-          driver state.
+          driver state.\\
 
     \item \textbf{\texttt{scale}}
           \\Exercises the backing data structure at scale, 100K page single epoch
           writes, incremental growth across many cutover/dump cycles,
           small chunk procfs reads of large dumps, and writes
           near the maximum span of a bitmap based backend to catch off by one
-          or capacity errors.
+          or capacity errors.\\
 
     \item \textbf{\texttt{snapshot\_isolation}}
           \\Verifies snapshot atomicity, pages written after cutover must not
           appear in the current snapshot, empty epochs must not carry over pages
           from the previous epoch, concurrent inserts during a dump read must not
           corrupt the snapshot, and a second read of an already drained delta mode
-          dump must return zero entries.
+          dump must return zero entries.\\
 
     \item \textbf{\texttt{stats\_accuracy}}
           \\Validates the diagnostic stats interface, the insert counter must
           match the number of distinct pages written, counters must reset to zero
           on stop/start, lock-wait counters must be non-negative, and stats
-          must be disabled (zeroed or unavailable) by default.
+          must be disabled (zeroed or unavailable) by default.\\
 
     \item \textbf{\texttt{table\_lifecycle}}
           \\Tests the dirty-tracking table through basic create/destroy cycles,
           verifying that reinitialisation clears all entries, that stop/start
           produces an empty table, that multiple reinit cycles are stable under
           stress, and that two independent allocations tracked in one session
-          both appear correctly in the dump.
+          both appear correctly in the dump.\\
 
     \item \textbf{\texttt{tracking\_hints}}
           \\Tests the hint interface for selecting the data structure backend,
