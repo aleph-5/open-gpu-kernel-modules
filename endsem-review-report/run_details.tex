@@ -31,7 +31,7 @@ ls /proc/driver/nvidia-uvm/dirty_*
 
 Replace \texttt{<PID>} with the TGID of the CUDA process under observation.
 
-\subsubsection*{Lifecycle Controls}
+\mainsubsubsection{Lifecycle Controls}
 
 \begin{lstlisting}
 # Initialise live table, downgrade GPU PTEs to READ_ONLY, begin recording.
@@ -50,7 +50,7 @@ echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_resume
 echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_stop
 \end{lstlisting}
 
-\subsubsection*{Query Controls}
+\mainsubsubsection{Query Controls}
 
 \begin{lstlisting}
 # Drain fault buffer, atomically swap live->snapshot, install fresh live table.
@@ -61,7 +61,7 @@ echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
 cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump
 \end{lstlisting}
 
-\subsubsection*{Statistics Controls}
+\mainsubsubsection{Statistics Controls}
 
 \begin{lstlisting}
 # Enable instrumentation and reset all counters to zero.

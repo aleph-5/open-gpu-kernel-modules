@@ -73,7 +73,7 @@
 \caption{End-to-end workflow of the dirty page tracking system, illustrating procfs control paths, GPU fault handling, and state transitions.}
 \label{fig:permission-lifecycle-flow}
 \end{figure}
-\subsubsection*{State Machine}
+\mainsubsubsection{State Machine}
 Dirty tracking is modelled as a single-owner lifecycle state machine, with
 all lifecycle operations serialized by
 \texttt{uvm\_dirty\_lifecycle\_lock} and guarded by owner-PID checks.
@@ -134,7 +134,7 @@ The states are:
 Transitions that violate owner checks, state preconditions, or snapshot guards
 are rejected by the procfs handlers.
 
-\subsubsection*{Permission Lifecycle}
+\mainsubsubsection{Permission Lifecycle}
 Figure~\ref{fig:permission-lifecycle-flow} captures the permission policy used
 to turn hardware write access into explicit software-recorded dirty events.
 
@@ -176,7 +176,7 @@ cumulative table before output.
 masks and tears down live, snapshot, and cumulative tracking state, returning
 the system to its pre-tracking permission configuration.
 
-\subsubsection*{Modified Driver Files}
+\mainsubsubsection{Modified Driver Files}
 All driver modifications reside under \texttt{kernel-open/nvidia-uvm/}.
 The files containing functionality added or significantly modified by us are:
 
@@ -293,7 +293,7 @@ The files containing functionality added or significantly modified by us are:
 
 \mainsubsection{Procfs Interface}
 
-Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
+Nine procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
 
 \begin{enumerate}
     \item \textbf{\texttt{dirty\_tracking\_start} (write)} \\ 
@@ -370,7 +370,7 @@ Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
 \end{enumerate}
 
 \mainsubsection{Design Choices}
-\subsubsection*{Determinism Guarantees}
+\mainsubsubsection{Determinism Guarantees}
 
 \paragraph{Write-Capture Determinism}
 The implementation provides deterministic \emph{first-write capture} for GPU
@@ -650,7 +650,7 @@ recorded between the previous dump and the current cutover.
           allowing the next cutover.
 \end{enumerate}
 
-\subsubsection*{Query Modes}
+\mainsubsubsection{Query Modes}
 
 The tracking system supports two query modes, selected at \texttt{dirty\_tracking\_start}
 time and fixed for the lifetime of the session.
@@ -661,7 +661,7 @@ three-table pipeline (\texttt{g\_dirty\_ds}, \texttt{g\_dirty\_ds\_snapshot},
 \paragraph{Delta mode}
 In delta mode the output of each \texttt{query\_dump} reflects only the pages
 written between the immediately preceding \texttt{query\_cutover} and the one
-before it — a per-epoch incremental diff.
+before it, a per-epoch incremental diff.
 
 \begin{enumerate}
     \item \textbf{Epoch scoping.}
@@ -878,6 +878,7 @@ Table~\ref{tab:backends} summarises the key properties of each.
 \hline
 \textbf{Backend} & \textbf{Insert} & \textbf{Lookup} & \textbf{Iterate} & \textbf{Notes} \\
 \hline
+bitmap           & $O(1)$            & $O(1)$          & $O(P/w + k)$     & flat \texttt{vzalloc} bitmap; \textbf{no timestamps}; 32\,MB fixed \\
 xarray           & $O(1)$ amortised  & $O(1)$          & $O(n)$           & atomic \texttt{xa\_cmpxchg}; timestamps stored \\
 sorted vector    & $O(n)$            & $O(\log n)$     & $O(\log n + k)$  & binary-search insert; no internal lock \\
 unsorted vector  & $O(n)$            & $O(n)$          & $O(n)$           & append-only; IRQ-safe spinlock \\
@@ -887,10 +888,22 @@ chunked vector   & $O(1)$ amortised  & $O(\log n+n_c)$ & $O(n)$           & back
 \hline
 \end{tabular}
 \caption{Backend summary. $n$ = dirty page count, $k$ = pages in query range,
-         $w$ = word size in bits, $B$ = number of allocated VA blocks,
-         $n_c$ = entries in active (unsorted) chunk.}
+         $P$ = \texttt{DIRTY\_BITMAP\_MAX\_PAGES} ($2^{38}$), $w$ = word size in bits,
+         $B$ = number of allocated VA blocks, $n_c$ = entries in active (unsorted) chunk.}
 \label{tab:backends}
 \end{table}
+
+\subparagraph{Bitmap (\texttt{uvm\_dirty\_ds\_bitmap.c})}
+A flat \texttt{vzalloc}'d bitmap of $2^{38}$ bits, covering up to 246\,TB VA
+with a fixed 32\,MB allocation.
+Insert is a single atomic \texttt{set\_bit}: $O(1)$, no per-entry allocation.
+Lookup is \texttt{test\_bit}: $O(1)$, returning a static sentinel rather than
+a heap-allocated \texttt{dirty\_page\_info} since timestamps are not stored.
+Iteration walks the bitmap with \texttt{find\_next\_bit}: $O(P/w + k)$.
+The fixed allocation dominates memory cost for sparse working sets; in return,
+the insert path is the cheapest of all backends.
+Timestamps are silently discarded, so this backend is unsuitable when
+per-page first-write ordering is required.
 
 \subparagraph{xarray (\texttt{uvm\_dirty\_ds\_xarray.c})}
 Uses the Linux \texttt{xarray} (a radix-tree variant) keyed by page number.
@@ -977,7 +990,7 @@ Up to \texttt{MAX\_CHUNKS} = 64 chunks are supported; the kthread is stopped
 on \texttt{destroy}.
 
 
-\subsubsection*{Concurrency Design}
+\mainsubsubsection{Concurrency Design}
 
 The dirty-tracking pipeline spans two execution contexts that run
 concurrently: (1) the GPU replayable-fault bottom-half thread that calls
@@ -1192,7 +1205,7 @@ The dump handler holds \texttt{lifecycle\_lock} and \texttt{ds\_rwsem}
 (read) simultaneously but never acquires \texttt{va\_spaces.lock},
 keeping it disjoint from the downgrade path.
 
-\subsubsection*{Prefetching}
+\mainsubsubsection{Prefetching}
 Prefetch faults are treated as non-dirtying events in the tracking pipeline.
 Hardware prefetch accesses are decoded as
 \texttt{UVM\_FAULT\_ACCESS\_TYPE\_PREFETCH}, while dirty insertion in

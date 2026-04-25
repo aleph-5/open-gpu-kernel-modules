@@ -3,10 +3,11 @@
 \usepackage[T1]{fontenc}
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
-\usepackage{hyperref}
-\setcounter{tocdepth}{2}
-\newcommand{\mainsection}[1]{\phantomsection\addcontentsline{toc}{section}{#1}\section*{#1}}
-\newcommand{\mainsubsection}[1]{\phantomsection\addcontentsline{toc}{subsection}{#1}\subsection*{#1}}
+\usepackage[hidelinks]{hyperref}
+\setcounter{tocdepth}{3}
+\newcommand{\mainsection}[1]{\addcontentsline{toc}{section}{#1}\section*{#1}}
+\newcommand{\mainsubsection}[1]{\addcontentsline{toc}{subsection}{#1}\subsection*{#1}}
+\newcommand{\mainsubsubsection}[1]{\addcontentsline{toc}{subsubsection}{#1}\subsubsection*{#1}}
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{longtable}
@@ -61,14 +62,17 @@
 \date{\today}
 
 \begin{document}
+\raggedbottom
+\widowpenalty=150
+\clubpenalty=150
+\makeatletter\@secpenalty=0\makeatother
 \maketitle
 
 \input{project_overview}
 \input{group_details}
 
-\clearpage
+\newpage
 \tableofcontents
-\clearpage
 
 \input{implementation}
 \input{tests_analysis}
