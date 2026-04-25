@@ -1,39 +1,39 @@
-\section*{Instructions for Run}
+\mainsection{Instructions for Run}
 
 This section gives step-by-step commands to build the module, exercise every
 procfs control path, and run the correctness and performance test suites.
 
-\subsection*{Prerequisites}
+\mainsubsection{Prerequisites}
 
 All operations require root. Verify the NVIDIA driver and CUDA toolkit are present:
 
-\begin{verbatim}
+\begin{lstlisting}
 nvidia-smi
 nvcc --version
-\end{verbatim}
+\end{lstlisting}
 
-\subsection*{Build and Load the Module}
+\mainsubsection{Build and Load the Module}
 
-\begin{verbatim}
+\begin{lstlisting}
 sudo make modules -j$(nproc)       # compile all kernel modules
 sudo make modules_install -j$(nproc) # install .ko files
 sudo modprobe -r nvidia_uvm        # unload old nvidia_uvm
 sudo modprobe nvidia_uvm           # load modified nvidia_uvm
-\end{verbatim}
+\end{lstlisting}
 
 Verify the procfs entries are present:
 
-\begin{verbatim}
+\begin{lstlisting}
 ls /proc/driver/nvidia-uvm/dirty_*
-\end{verbatim}
+\end{lstlisting}
 
-\subsection*{Exercising the Procfs Interface}
+\mainsubsection{Exercising the Procfs Interface}
 
 Replace \texttt{<PID>} with the TGID of the CUDA process under observation.
 
 \subsubsection*{Lifecycle Controls}
 
-\begin{verbatim}
+\begin{lstlisting}
 # Initialise live table, downgrade GPU PTEs to READ_ONLY, begin recording.
 echo "<PID> delta" > /proc/driver/nvidia-uvm/dirty_tracking_start
 
@@ -48,22 +48,22 @@ echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_resume
 
 # Restore GPU permissions, destroy all tables, flush stats to /tmp/.
 echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_stop
-\end{verbatim}
+\end{lstlisting}
 
 \subsubsection*{Query Controls}
 
-\begin{verbatim}
+\begin{lstlisting}
 # Drain fault buffer, atomically swap live->snapshot, install fresh live table.
 echo "<PID>" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
 
 # Emit frozen snapshot; in cumulative mode, merge into session-union first.
-# Output: one line per dirty page — "0x<addr> <timestamp_ns>"
+# Output: one line per dirty page: "0x<addr> <timestamp_ns>"
 cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump
-\end{verbatim}
+\end{lstlisting}
 
 \subsubsection*{Statistics Controls}
 
-\begin{verbatim}
+\begin{lstlisting}
 # Enable instrumentation and reset all counters to zero.
 echo "enable" > /proc/driver/nvidia-uvm/dirty_ds_stats_toggle
 
@@ -72,11 +72,11 @@ echo "disable" > /proc/driver/nvidia-uvm/dirty_ds_stats_toggle
 
 # Print per-operation counts, average latency, rwsem wait time, callback timing.
 cat /proc/driver/nvidia-uvm/dirty_ds_stats
-\end{verbatim}
+\end{lstlisting}
 
-\subsection*{Typical End-to-End Session}
+\mainsubsection{Typical End-to-End Session}
 
-\begin{verbatim}
+\begin{lstlisting}
 ./my_cuda_workload &
 PID=$!
 
@@ -95,11 +95,11 @@ echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_query_cutover
 cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump > epoch2_dirty_pages.txt
 
 echo "$PID" > /proc/driver/nvidia-uvm/dirty_tracking_stop
-\end{verbatim}
+\end{lstlisting}
 
-\subsection*{Correctness Tests}
+\mainsubsection{Correctness Tests}
 
-\begin{verbatim}
+\begin{lstlisting}
 # Run every suite in canonical order.
 sudo python3 correctness_tests/run_all.py
 
@@ -114,10 +114,10 @@ sudo python3 run_tests.py --no-build
 
 # Show stdout even for passing tests.
 sudo python3 run_tests.py --verbose
-\end{verbatim}
+\end{lstlisting}
 
-\subsection*{Performance Tests}
-\begin{verbatim}
+\mainsubsection{Performance Tests}
+\begin{lstlisting}
 # Run every suite in canonical order.
 sudo python3 correctness_tests/run_all.py
 
@@ -132,4 +132,4 @@ sudo python3 run_tests.py --no-build
 
 # Show stdout even for passing tests.
 sudo python3 run_tests.py --verbose
-\end{verbatim}
+\end{lstlisting}

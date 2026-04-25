@@ -1,6 +1,6 @@
-\section*{Future Work}
+\mainsection{Future Work}
 
-\subsection*{Program Analysis for Backend Selection and Overhead Reduction}
+\mainsubsection{Program Analysis for Backend Selection and Overhead Reduction}
 
 The largest overhead driver is the number of write faults fired per unit of
 work, which is determined entirely by each kernel's memory access pattern.
@@ -30,7 +30,7 @@ This is most valuable at large working-set sizes (32-64\,GB) where the
 downgrade walk is a non-trivial fraction of \texttt{start}/\texttt{resume}
 latency.
 
-\subsection*{Migration Policy for the Oversubscribed Regime}
+\mainsubsection{Migration Policy for the Oversubscribed Regime}
 
 In the oversubscribed regime the GPU's on-device memory is exhausted and UVM
 evicts pages to host DRAM using an LRU policy that has no knowledge of write

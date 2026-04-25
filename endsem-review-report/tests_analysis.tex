@@ -1,4 +1,4 @@
-\section*{Testing and Analysis}
+\mainsection{Testing and Analysis}
 
 The testing and analysis was done in two parts
 \begin{itemize}
@@ -6,7 +6,7 @@ The testing and analysis was done in two parts
     \item \textbf{Performance Testing}
 \end{itemize}
 
-\subsection*{Correctness Testing}
+\mainsubsection{Correctness Testing}
 The correctness was evaluated using CUDA tests under \texttt{correctness\_tests}.
 The suites are intended to cover the following categories :
 \begin{enumerate}
@@ -123,7 +123,7 @@ The suites are intended to cover the following categories :
           \\Tests the hint interface for selecting the data structure backend,
           verifies that on using either hint, the output is consistent with the
           expected one, and that switching hits bwtween sessions does not interfere
-          with the tracking state.
+          with the tracking state.\\
 
     \item \textbf{\texttt{generic}}
           \\A broad integration suite covering the core procfs interface
@@ -131,9 +131,6 @@ The suites are intended to cover the following categories :
           Validates that writes are tracked, reads are not, cutover atomically
           snapshots the epoch, stop fully resets state, \texttt{cudaFree} does
           not remove entries, and cumulative vs.\ delta mode behave as specified.
-          \\Although this adds no new functionality in addition to the other suites
-          This acts as a quick screening to check if the basic functionalities work.
-
 \end{enumerate}
 
 \paragraph{Observations}
@@ -283,7 +280,7 @@ Generic & \texttt{test\_dirty\_tracking\_suite} & Integration smoke test coverin
 \normalsize
 \end{center}
 
-\subsection*{Performance Testing}
+\mainsubsection{Performance Testing}
 The performance overhead of the dirty-tracking pipeline was evaluated using the
 \texttt{run\_overhead\_benchmark.sh} script, which measures wall-clock time for
 each benchmark with tracking \textbf{OFF} (baseline) and tracking \textbf{ON},

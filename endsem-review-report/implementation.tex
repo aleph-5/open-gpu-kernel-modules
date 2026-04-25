@@ -1,6 +1,6 @@
-\section*{Implementation}
+\mainsection{Implementation}
 
-\subsection*{End-to-end Workflow}
+\mainsubsection{End-to-end Workflow}
 \begin{figure}[H]
 \centering
 \resizebox{1.08\linewidth}{!}{%
@@ -291,7 +291,7 @@ The files containing functionality added or significantly modified by us are:
           callback pointers are registered before tracking control paths execute.
 \end{enumerate}
 
-\subsection*{Procfs Interface}
+\mainsubsection{Procfs Interface}
 
 Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
 
@@ -369,7 +369,7 @@ Eight procfs entries are created under \texttt{/proc/driver/nvidia-uvm/}:
       
 \end{enumerate}
 
-\subsection*{Design Choices}
+\mainsubsection{Design Choices}
 \subsubsection*{Determinism Guarantees}
 
 \paragraph{Write-Capture Determinism}
@@ -655,13 +655,13 @@ recorded between the previous dump and the current cutover.
 \paragraph{Global state}
 Three \texttt{uvm\_dirty\_ds} instances hold the tracking data:
 \begin{enumerate}
-      \item \texttt{g\_dirty\_ds} — live table; the fault handler inserts here
+      \item \texttt{g\_dirty\_ds} live table; the fault handler inserts here
             on every qualifying write fault while \texttt{active=true}.
-      \item \texttt{g\_dirty\_ds\_snapshot} — frozen copy created by
+      \item \texttt{g\_dirty\_ds\_snapshot} frozen copy created by
             \texttt{query\_cutover}; exists only between a cutover and the
             subsequent \texttt{query\_dump}.  Once consumed the pointer is
             set to \texttt{NULL}.
-      \item \texttt{g\_dirty\_ds\_cumulative} — session-union table used in
+      \item \texttt{g\_dirty\_ds\_cumulative} session-union table used in
             cumulative mode; each \texttt{query\_dump} merges the snapshot
             into this table with first-write-wins semantics before emitting output.
 \end{enumerate}
@@ -676,35 +676,35 @@ backend fills in its own implementations at module link time.
 This separates the \emph{interface} (what operations exist and what they mean)
 from the \emph{implementation} (how a particular data structure carries them
 out), so a new backend can be plugged in by pointing \texttt{g\_dirty\_ds.ops}
-at a different ops struct — no other code needs to change.
+at a different ops struct no other code needs to change.
 
 \subparagraph{The ops table (\texttt{struct uvm\_dirty\_ds\_ops})}
 
 \begin{itemize}
-    \item \textbf{\texttt{init(ds)}} — allocates and initialises the
+    \item \textbf{\texttt{init(ds)}} allocates and initialises the
           backend-private state, storing the pointer in \texttt{ds->priv}.
           Called once per table lifetime under the DS write lock.
 
-    \item \textbf{\texttt{insert(ds, page\_num, timestamp)}} — records a dirty
+    \item \textbf{\texttt{insert(ds, page\_num, timestamp)}} records a dirty
           page with its first-write timestamp.
           All backends implement first-write-wins: if \texttt{page\_num} is
           already present the call is a no-op and the original timestamp is
           preserved.
           Called from the fault-handler hot path.
 
-    \item \textbf{\texttt{lookup(ds, page\_num)}} — returns a pointer to the
+    \item \textbf{\texttt{lookup(ds, page\_num)}} returns a pointer to the
           \texttt{dirty\_page\_info} for the given page, or \texttt{NULL} if
           not dirty.
           Used by the cumulative merge path and the snapshot-persistence guard.
 
-    \item \textbf{\texttt{for\_each\_in\_range(ds, start, end, fn, ctx)}} —
+    \item \textbf{\texttt{for\_each\_in\_range(ds, start, end, fn, ctx)}}
           iterates all dirty pages whose page number falls in
           $[\textit{start}, \textit{end}]$ and invokes the callback
           \texttt{fn(page\_num, timestamp, ctx)} for each.
           Used by \texttt{query\_dump} to emit output and by the cumulative
           merge path.
 
-    \item \textbf{\texttt{destroy(ds)}} — frees all entries and the
+    \item \textbf{\texttt{destroy(ds)}} frees all entries and the
           backend-private state, then sets \texttt{ds->priv = NULL}.
           Called under the DS write lock at \texttt{stop} or on error
           unwind.
@@ -731,7 +731,7 @@ whether a session is active.
 
 Rather than scattering timing code into each backend,
 \texttt{uvm\_dirty\_ds.h} provides five \texttt{static inline} wrappers
-— one per op — that intercept every call when
+one per op that intercept every call when
 \texttt{ds->stats.enabled} is true:
 
 \begin{enumerate}

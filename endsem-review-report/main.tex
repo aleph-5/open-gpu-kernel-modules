@@ -4,12 +4,29 @@
 \usepackage[utf8]{inputenc}
 \usepackage{lmodern}
 \usepackage{hyperref}
+\setcounter{tocdepth}{2}
+\newcommand{\mainsection}[1]{\phantomsection\addcontentsline{toc}{section}{#1}\section*{#1}}
+\newcommand{\mainsubsection}[1]{\phantomsection\addcontentsline{toc}{subsection}{#1}\subsection*{#1}}
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{longtable}
 \usepackage{enumitem}
 \usepackage{amsmath}
 \usepackage{verbatim}
+\usepackage{listings}
+\lstset{
+  basicstyle=\small\ttfamily,
+  backgroundcolor=\color{gray!10},
+  frame=single,
+  framerule=0.4pt,
+  rulecolor=\color{gray!45},
+  framesep=5pt,
+  xleftmargin=5pt,
+  xrightmargin=5pt,
+  breaklines=true,
+  showstringspaces=false,
+  columns=fullflexible,
+}
 \usepackage{microtype}
 \renewcommand{\_}{\textunderscore\allowbreak}
 \usepackage{float}
@@ -48,6 +65,11 @@
 
 \input{project_overview}
 \input{group_details}
+
+\clearpage
+\tableofcontents
+\clearpage
+
 \input{implementation}
 \input{tests_analysis}
 \input{future_work}
