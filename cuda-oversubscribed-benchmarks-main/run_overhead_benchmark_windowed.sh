@@ -34,12 +34,13 @@ DT_DUMP="/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 
 # Tunables. Override like:
-# SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00" QUERY_COUNTS="1 5 10" sudo -E bash run_overhead_benchmark.sh
+# SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00" NUM_EPOCHS="1 5 10" sudo -E bash run_overhead_benchmark.sh
 # SLEEP_INTERVAL is the tracking window length: after dirty tracking starts,
 # tracking is stopped after exactly this many seconds. Dirty-page queries are
-# evenly spread inside this window, assuming the process does not exit within the epoch
+# evenly spread inside this window, assuming the process does not exit within the tracking_interval
+# NUM_EPOCHS is the number of queries doen within a tracking interval
 read -ra SLEEP_INTERVALS <<< "${SLEEP_INTERVALS:-0.01 0.05 0.10 0.50 1.00}"
-read -ra QUERY_COUNTS    <<< "${QUERY_COUNTS:-1 5 10}"
+read -ra NUM_EPOCHS    <<< "${NUM_EPOCHS:-1 5 10}"
 START_POLL_INTERVAL="${START_POLL_INTERVAL:-0.05}"
 
 # ---------------------------------------------------------------------------
@@ -198,58 +199,58 @@ sleep_until_ns() {
     fi
 }
 
-# After tracking has started, run repeated epochs of length sleep_interval for
-# the entire benchmark duration.  Each epoch fires query_count evenly-spaced
-# queries, then resets tracking for the next epoch by writing to DT_STOP
-# (clears the live accumulator) and DT_START (starts the next epoch).  The
+# After tracking has started, run repeated tracking_intervals of length sleep_interval for
+# the entire benchmark duration.  Each tracking_interval fires epoch_count evenly-spaced
+# queries, then resets tracking for the next tracking_interval by writing to DT_STOP
+# (clears the live accumulator) and DT_START (starts the next tracking_interval).  The
 # loop exits when the benchmark process exits.
 tracking_window() {
     local bench_pid="$1"
     local sleep_interval="$2"
-    local query_count="$3"
+    local epoch_count="$3"
     local row_name="$4"
     local rep="$5"
-    local epoch_start_ns="$6"
+    local tracking_interval_start_ns="$6"
 
-    local interval_ns epoch q target_ns now_ns dump_file pages
+    local interval_ns tracking_interval q target_ns now_ns dump_file pages
     interval_ns=$(seconds_to_ns "$sleep_interval")
-    epoch=0
+    tracking_interval=0
 
     while kill -0 "$bench_pid" 2>>"$ERR_LOG"; do
-        local epoch_stop_ns=$(( epoch_start_ns + interval_ns ))
-        epoch=$(( epoch + 1 ))
+        local tracking_interval_stop_ns=$(( tracking_interval_start_ns + interval_ns ))
+        tracking_interval=$(( tracking_interval + 1 ))
 
-        # Query times are strictly inside this epoch:
-        #   k * sleep_interval / (query_count + 1), k = 1..query_count.
-        for ((q=1; q<=query_count; q++)); do
-            target_ns=$(( epoch_start_ns + (interval_ns * q) / (query_count + 1) ))
+        # Query times are strictly inside this tracking_interval:
+        #   k * sleep_interval / (epoch_count + 1), k = 1..epoch_count.
+        for ((q=1; q<=epoch_count; q++)); do
+            target_ns=$(( tracking_interval_start_ns + (interval_ns * q) / (epoch_count + 1) ))
             sleep_until_ns "$target_ns"
 
             # Exit if benchmark finished while we were sleeping.
             kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
 
             now_ns=$(date +%s%N)
-            (( now_ns >= epoch_stop_ns )) && break
+            (( now_ns >= tracking_interval_stop_ns )) && break
 
-            dump_file="$DUMP_DIR/${row_name}_rep${rep}_epoch${epoch}_query${q}_pid_${bench_pid}.txt"
+            dump_file="$DUMP_DIR/${row_name}_rep${rep}_tracking_interval${tracking_interval}_epoch${q}_pid_${bench_pid}.txt"
             echo "$bench_pid" > "$DT_CUTOVER" 2>>"$ERR_LOG" || true
             cat "$DT_DUMP" > "$dump_file" 2>>"$ERR_LOG" || true
             pages=$(grep -c '^0x' "$dump_file" 2>>"$ERR_LOG" || true)
-            echo "  [tracking] ${row_name} rep=${rep} epoch=${epoch} query=${q}/${query_count}: dirty pages: ${pages}  (dump -> ${dump_file})" >&2
+            echo "  [tracking] ${row_name} rep=${rep} tracking_interval=${tracking_interval} epoch=${q}/${epoch_count}: dirty pages: ${pages}  (dump -> ${dump_file})" >&2
         done
 
-        # Wait until the epoch boundary, then roll over to the next epoch.
-        sleep_until_ns "$epoch_stop_ns"
+        # Wait until the tracking_interval boundary, then roll over to the next tracking_interval.
+        sleep_until_ns "$tracking_interval_stop_ns"
         kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
 
-        # Stop current epoch and start the next one.  
+        # Stop current tracking_interval and start the next one.  
         echo "$bench_pid" > "$DT_STOP" 2>>/dev/null || true
         for ((restart=0; restart<50; restart++)); do
             kill -0 "$bench_pid" 2>/dev/null || break 2
             echo "$bench_pid cumulative" > "$DT_START" 2>> /dev/null && break
             sleep 0.01
         done
-        epoch_start_ns="$epoch_stop_ns"
+        tracking_interval_start_ns="$tracking_interval_stop_ns"
     done
 
     # Final cleanup: stop tracking if it was still running.
@@ -258,7 +259,7 @@ tracking_window() {
 
 measure_wall_tracked() {
     local sleep_interval="$1"; shift
-    local query_count="$1"; shift
+    local epoch_count="$1"; shift
     local row_name="$1"; shift
     local rep="$1"; shift
     local dir="$1"; shift
@@ -283,7 +284,7 @@ measure_wall_tracked() {
         if echo "$bench_pid cumulative" > "$DT_START" 2>>"$ERR_LOG"; then
             tracking_start_ns=$(date +%s%N)
             started=1
-            tracking_window "$bench_pid" "$sleep_interval" "$query_count" "$row_name" "$rep" "$tracking_start_ns" &
+            tracking_window "$bench_pid" "$sleep_interval" "$epoch_count" "$row_name" "$rep" "$tracking_start_ns" &
             tracker_pid=$!
             break
         fi
@@ -331,7 +332,7 @@ EOF
 # Main loop
 # ---------------------------------------------------------------------------
 
-echo "row_name,benchmark,sleep_interval_s,queries_per_epoch,reps,off_avg_s,off_std_s,on_avg_s,on_std_s,overhead_pct" | tee "$OUT_CSV"
+echo "row_name,benchmark,sleep_interval_s,queries_per_tracking_interval,reps,off_avg_s,off_std_s,on_avg_s,on_std_s,overhead_pct" | tee "$OUT_CSV"
 
 while IFS= read -r entry; do
 	echo $entry
@@ -367,13 +368,13 @@ while IFS= read -r entry; do
     for sleep_interval in "${SLEEP_INTERVALS[@]}"; do
         sleep_tag=$(tagify "$sleep_interval")
 
-        for query_count in "${QUERY_COUNTS[@]}"; do
-            row_name="${name}__sleep_${sleep_tag}__queries_${query_count}"
+        for epoch_count in "${NUM_EPOCHS[@]}"; do
+            row_name="${name}__sleep_${sleep_tag}__queries_${epoch_count}"
 
             echo -n "  $row_name (ON) ... " >&2
             on_times=()
             for ((i=0; i<REPS; i++)); do
-                t=$(measure_wall_tracked "$sleep_interval" "$query_count" "$row_name" "$i" "$dir" "${cmd[@]}")
+                t=$(measure_wall_tracked "$sleep_interval" "$epoch_count" "$row_name" "$i" "$dir" "${cmd[@]}")
                 on_times+=("$t")
                 echo -n "." >&2
             done
@@ -387,7 +388,7 @@ pct = 100.0 * (on - off) / off if off > 0 else 0.0
 print(f'{pct:+.1f}')
 ")
 
-            row="$row_name,$name,$sleep_interval,$query_count,$REPS,$off_avg,$off_std,$on_avg,$on_std,$overhead"
+            row="$row_name,$name,$sleep_interval,$epoch_count,$REPS,$off_avg,$off_std,$on_avg,$on_std,$overhead"
             echo "$row" | tee -a "$OUT_CSV"
         done
     done

@@ -510,6 +510,40 @@ The oversubscribed regime adds eviction-driven re-faulting, but first-write-wins
 semantics cap dirty insertions to one per page per epoch regardless of eviction
 frequency, preventing unbounded overhead growth.
 
+\paragraph{Query-Frequency Sensitivity}
+Figure~\ref{fig:overhead_query_freq} shows how overhead varies with the number
+of epochs per tracking interval (1, 5, or 10 \texttt{query\_dump}
+calls between a \texttt{start\_track}/\texttt{stop\_track} pair) for all
+512\,MB benchmarks.
+This experiment was run on \texttt{int\_set\_seq} as the primary benchmark.
+Each point is the mean overhead across five sleep-interval configurations
+(0.01\,s--1.00\,s), with error bars showing one standard deviation.
+
+Across every benchmark, the three lines overlap almost entirely:
+adding more epochs per tracking interval does not measurably increase overhead.
+This is expected by design---\texttt{query\_dump} in delta mode consumes
+the current snapshot and moves a pointer; it does not re-scan the backing
+structure proportional to its size.
+The slight spread visible on Needle reflects variability across
+sleep-interval settings rather than an epoch-count effect: at 512\,MB
+the Needle working set fits comfortably in VRAM, and the overhead is
+governed by when the epoch boundary lands relative to active write phases rather
+than how many epochs are issued per tracking interval.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\linewidth]{overhead_query_freq.pdf}
+\caption{Overhead at 512\,MB working set as a function of epoch frequency
+         (1, 5, or 10 \texttt{query\_dump} calls per tracking interval),
+         with \texttt{int\_set\_seq} as the primary benchmark.
+         Each point is the mean over five sleep-interval configurations;
+         error bars show $\pm$1 standard deviation.
+         The three lines are nearly coincident for every benchmark,
+         confirming that issuing more epochs per tracking interval does not
+         increase tracking overhead.}
+\label{fig:overhead_query_freq}
+\end{figure}
+
 \paragraph{Cross-Backend Overhead Comparison}
 The six available backends differ substantially in algorithmic complexity for
 insert and iteration.

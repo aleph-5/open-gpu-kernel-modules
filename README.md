@@ -2,9 +2,10 @@
 
 **Project:** Low-Overhead Dirty Access Tracking in GPU-UVM
 **Team:** Aditi Khandelia, Arush Upadhyaya, Kushagra Srivastava, Sankalp Mittal, Vidhi Jain
+
 **Course:** CS614
 
-This document is the artifact-evaluation roadmap for the project. It complements the top-level [README.md](README.md) (which describes the design) and the end-semester report at [endsem-review-report/main.pdf](endsem-review-report/main.pdf).
+This document is the artifact-evaluation roadmap for the project.
 
 ---
 
@@ -42,17 +43,24 @@ open-gpu-kernel-modules/
 |   |-- stress_tests/              # high-write-pressure stress
 |   `-- plots/                     # plot_*.py scripts
 |
-|-- cuda-oversubscribed-benchmarks-main/  # UVM benchmark
-|                                         # (run_overhead_benchmark.sh)
-|-- endsem-review-report/          # End-sem report (main.pdf + sources)
-|   |-- main.pdf                   # Final report
-|   |-- overhead_results_final.csv # Raw overhead numbers
-|   `-- *.pdf                      # Generated overhead plots
+|-- cuda-oversubscribed-benchmarks-main/  # benchmark suite
+|   |-- synthetic_benchmarks/      # int_set_uvm, vector_add, random_acc, ...
+|   |-- nvidia-samples/            # sgemm
+|   |-- polybench/                 # PolyBench/GPU UVM ports
+|   |-- rodinia/                   # Rodinia UVM ports
+|   |-- helpers/                   # Shared benchmark helpers
+|   |-- dev/                       # Dev / scratch
+|   |-- perf_logs/                 # Logs from runs
+|   |-- run_overhead_benchmark.sh  # Driver script (REPS, benchmark filter)
+|   |-- run_overhead_benchmark_windowed.sh  # Permuted benchmarks runner
+|   |-- overhead_results.csv       # Latest run output
+|   |-- overhead_results_final-vector.csv   # Reference results (vector backend)
+|   |-- Makefile                   # Top-level benchmark build
+|   `-- README.md                  # Benchmark suite docs
 |
 |-- compile.sh                     # Build + reload nvidia_uvm in one step
 |-- Makefile                       # Top-level kernel-module build
-|-- README.md                      # Design overview
-`-- README_eval.md                 # (this file)
+|-- README.md                      # (This File)
 ```
 
 ---
@@ -163,7 +171,7 @@ The implementation is feature-complete for **GPU write-fault tracking with first
 
 ### Unsupported / out of scope
 
-- **CPU-side dirty tracking.** Only GPU write faults are intercepted; CPU writes to managed memory are not currently recorded (planned via `mmu_notifier`; see [endsem-review-report/future_work.tex](endsem-review-report/future_work.tex)).
+- **CPU-side dirty tracking.** Only GPU write faults are intercepted; CPU writes to managed memory are not currently recorded (planned via `mmu_notifier`).
 - **Per-page write counters / write frequency.** Only first-write timestamp is stored.
 - **Automatic backend selection.** The `dirty_tracking_hint` interface allows manual selection between sequential and random backends. Pattern driven automatic selection is future work.
 - **Multi-GPU partitioning.** All tests are single-GPU.
@@ -226,7 +234,7 @@ sudo cat /proc/driver/nvidia-uvm/dirty_tracking_query_dump > epoch1.txt
 ```
 You can stop the tracking using
 ```bash
-echo "$PID" | sudo tee /proc/driver/nvidia-uvm/dirty_tracking_stop  
+echo "$PID" | sudo tee /proc/driver/nvidia-uvm/dirty_tracking_stop
 ```
 
 ### 6.4 Supply your own input
@@ -248,13 +256,11 @@ echo "WRITE_SEQ" | sudo tee /proc/driver/nvidia-uvm/dirty_tracking_hint
 
 | # | Purpose | Command | Estimated runtime | Expected result | Where to find the actual result |
 |---|---------|---------|-------------------|-----------------|----------------------------------|
-| 1 | Run every correctness suite in canonical order | `sudo python3 correctness_tests/run_all.py` | < 5 min | 74/74 PASS | Stdout per-suite PASS/FAIL summary |
+| 1 | Run every correctness suite in canonical order | `sudo python3 correctness_tests/run_all.py` | < 10 min | 74/74 PASS | Stdout per-suite PASS/FAIL summary |
 | 2 | Run a single suite (e.g. ordering) | `cd correctness_tests/ordering && sudo python3 run_tests.py` | ~ 16 s | 8/8 PASS | Stdout |
 | 3 | Run a single test in a suite | `sudo python3 run_tests.py tc01` |~ 2 s | PASS | Stdout |
 | 4 | Re-run already-built binaries | `sudo python3 run_tests.py --no-build` | < 5 s/suite | PASS | Stdout |
 | 5 | Verbose mode (show stdout of passing tests) | `sudo python3 run_tests.py --verbose` | ~ same as 2 | PASS | Stdout |
-
-The full per-test result table (suite x test name x purpose x runtime) is reproduced in [endsem-review-report/main.pdf](endsem-review-report/main.pdf) "Testing and Analysis".
 
 ### 7.2 Performance experiments
 
@@ -267,7 +273,7 @@ sudo ./tc01_performance_overhead > results_seq.csv   # sequential write workload
 sudo ./tc02_random_write_overhead > results_rand.csv # random write workload
 ```
 
-- **Estimated runtime:** ~5–10 min (build) + ~30 s per benchmark binary.
+- **Estimated runtime:** ~5–10 sec (build) + ~3 min per benchmark binary.
 - **Expected result:** Two CSV files with wall-time overhead; tracking ON increases runtime proportionally to write-fault density.
 - **Access:** `results_seq.csv` and `results_rand.csv` in `performance_tests/general_performance/`.
 
@@ -311,7 +317,7 @@ sudo bash run_overhead_benchmark.sh 10 int_set_4k gemm  # REPS=10, specific benc
 
 - **Estimated runtime:** ~30–90 min for the full sweep (7 benchmarks x 8 sizes x 5 reps); use the specific-benchmark form for a quick spot-check (~5–10 min).
 - **Expected result:** `overhead_results.csv` with wall-time tracking OFF vs. ON, overhead percentage, and dirty page count per benchmark x size combination.
-- **Access:** `cuda-oversubscribed-benchmarks-main/overhead_results.csv`; compare against `endsem-review-report/overhead_results_final.csv`.
+- **Access:** `cuda-oversubscribed-benchmarks-main/overhead_results.csv`
 
 #### P5 — Per-operation latency by backend
 
@@ -330,11 +336,11 @@ To test the latency of different data structures:
 ### 7.3 Findings (crash / deadlock / assertion failures observed during evaluation)
 
 - **None.** Every correctness suite passes on the reference setup. The dedicated stress suites (`lifecycle_races`, `snapshot_isolation`, `procfs_robustness`, `scale`, `stress_tests`) all pass without driver-side warnings or oopses.
-- The known *performance* limitation — large overhead on write-fault-dense workloads — is documented in [endsem-review-report/main.pdf](endsem-review-report/main.pdf).
 
 ---
 
 ## 8. Pointers to Further Material
 
-- End-semester report (results, analysis, design rationale): [endsem-review-report/main.pdf](endsem-review-report/main.pdf)
-- Mid-semester report: [midsem-review-report/](midsem-review-report/main.pdf)
+- Correctness Tests: [`correctness_tests/`](./correctness_tests/)
+- Performance Tests [`performance_tests/`](./performance_tests/)
+- Benchmarks : [`cuda-oversubscribed-benchmarks-main/`](./cuda-oversubscribed-benchmarks-main/)
