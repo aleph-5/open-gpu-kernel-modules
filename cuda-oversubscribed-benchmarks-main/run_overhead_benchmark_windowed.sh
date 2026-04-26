@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-#!/usr/bin/env bash
-# run_overhead_benchmark.sh
+# run_overhead_benchmark_windowed.sh
 #
 # Measures dirty-tracking pipeline overhead on real workloads.
 # Runs each benchmark REPS times with tracking OFF and ON, reports wall time
@@ -25,6 +24,7 @@ shift || true   # remaining positional args are benchmark names to run (empty = 
 FILTER=("$@")   # e.g. ("gemm" "sgemm" "bfs")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_CSV="${OUT_CSV:-$SCRIPT_DIR/overhead_results.csv}"
+ERR_LOG="${ERR_LOG:-$SCRIPT_DIR/overhead_errors.log}"
 DUMP_DIR="/tmp/tracking_preload_dumps"
 
 DT_START="/proc/driver/nvidia-uvm/dirty_tracking_start"
@@ -34,10 +34,10 @@ DT_DUMP="/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 
 # Tunables. Override like:
-#   SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00" QUERY_COUNTS="1 5 10" sudo -E bash run_overhead_benchmark.sh
-# SLEEP_INTERVAL is now the tracking window length: after dirty tracking starts,
+# SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00" QUERY_COUNTS="1 5 10" sudo -E bash run_overhead_benchmark.sh
+# SLEEP_INTERVAL is the tracking window length: after dirty tracking starts,
 # tracking is stopped after exactly this many seconds. Dirty-page queries are
-# evenly spread inside this window.
+# evenly spread inside this window, assuming the process does not exit within the epoch
 read -ra SLEEP_INTERVALS <<< "${SLEEP_INTERVALS:-0.01 0.05 0.10 0.50 1.00}"
 read -ra QUERY_COUNTS    <<< "${QUERY_COUNTS:-1 5 10}"
 START_POLL_INTERVAL="${START_POLL_INTERVAL:-0.05}"
@@ -62,7 +62,9 @@ if [[ ! -e "$DT_START" ]]; then
 fi
 
 mkdir -p "$DUMP_DIR"
+: > "$ERR_LOG"   # truncate/create error log
 
+echo "==> Errors will be logged to $ERR_LOG"
 echo "==> Building benchmarks ..."
 make -C "$SCRIPT_DIR" -j"$(nproc)" 2>&1 | tail -5 || echo "  (some targets failed to build — missing binaries will be skipped)" >&2
 
@@ -172,7 +174,7 @@ measure_wall() {
     local cmd=("$@")
     local t0 t1
     t0=$(date +%s%N)
-    (cd "$SCRIPT_DIR/$dir" && "${cmd[@]}" >/dev/null 2>&1)
+    (cd "$SCRIPT_DIR/$dir" && "${cmd[@]}" >/dev/null 2>>"$ERR_LOG")
     t1=$(date +%s%N)
     # nanoseconds -> seconds with 3 decimal places
     echo "scale=3; ($t1 - $t0) / 1000000000" | bc
@@ -196,47 +198,62 @@ sleep_until_ns() {
     fi
 }
 
-# After tracking has started, query query_count times evenly inside the
-# sleep_interval window, and stop tracking exactly at the end of the window.
+# After tracking has started, run repeated epochs of length sleep_interval for
+# the entire benchmark duration.  Each epoch fires query_count evenly-spaced
+# queries, then resets tracking for the next epoch by writing to DT_STOP
+# (clears the live accumulator) and DT_START (starts the next epoch).  The
+# loop exits when the benchmark process exits.
 tracking_window() {
     local bench_pid="$1"
     local sleep_interval="$2"
     local query_count="$3"
     local row_name="$4"
     local rep="$5"
-    local start_ns="$6"
+    local epoch_start_ns="$6"
 
-    local interval_ns stop_ns stopper_pid q target_ns now_ns dump_file pages
+    local interval_ns epoch q target_ns now_ns dump_file pages
     interval_ns=$(seconds_to_ns "$sleep_interval")
-    stop_ns=$((start_ns + interval_ns))
+    epoch=0
 
-    # Stop is timed independently of dump/query latency.
-    (
-        sleep_until_ns "$stop_ns"
-        echo "$bench_pid" > "$DT_STOP" 2>/dev/null || true
-    ) &
-    stopper_pid=$!
+    while kill -0 "$bench_pid" 2>>"$ERR_LOG"; do
+        local epoch_stop_ns=$(( epoch_start_ns + interval_ns ))
+        epoch=$(( epoch + 1 ))
 
-    # Query times are strictly inside the interval:
-    #   k * sleep_interval / (query_count + 1), k = 1..query_count.
-    for ((q=1; q<=query_count; q++)); do
-        target_ns=$((start_ns + (interval_ns * q) / (query_count + 1)))
-        sleep_until_ns "$target_ns"
+        # Query times are strictly inside this epoch:
+        #   k * sleep_interval / (query_count + 1), k = 1..query_count.
+        for ((q=1; q<=query_count; q++)); do
+            target_ns=$(( epoch_start_ns + (interval_ns * q) / (query_count + 1) ))
+            sleep_until_ns "$target_ns"
 
-        now_ns=$(date +%s%N)
-        (( now_ns >= stop_ns )) && break
+            # Exit if benchmark finished while we were sleeping.
+            kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
 
-        # Stop querying if the benchmark already finished.
-        kill -0 "$bench_pid" 2>/dev/null || break
+            now_ns=$(date +%s%N)
+            (( now_ns >= epoch_stop_ns )) && break
 
-        dump_file="$DUMP_DIR/${row_name}_rep${rep}_query${q}_pid_${bench_pid}.txt"
-        echo "$bench_pid" > "$DT_CUTOVER" 2>/dev/null || true
-        cat "$DT_DUMP" > "$dump_file" 2>/dev/null || true
-        pages=$(grep -c '^0x' "$dump_file" 2>/dev/null || true)
-        echo "  [tracking] ${row_name} rep=${rep} query=${q}/${query_count}: dirty pages: ${pages}  (dump -> ${dump_file})" >&2
+            dump_file="$DUMP_DIR/${row_name}_rep${rep}_epoch${epoch}_query${q}_pid_${bench_pid}.txt"
+            echo "$bench_pid" > "$DT_CUTOVER" 2>>"$ERR_LOG" || true
+            cat "$DT_DUMP" > "$dump_file" 2>>"$ERR_LOG" || true
+            pages=$(grep -c '^0x' "$dump_file" 2>>"$ERR_LOG" || true)
+            echo "  [tracking] ${row_name} rep=${rep} epoch=${epoch} query=${q}/${query_count}: dirty pages: ${pages}  (dump -> ${dump_file})" >&2
+        done
+
+        # Wait until the epoch boundary, then roll over to the next epoch.
+        sleep_until_ns "$epoch_stop_ns"
+        kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
+
+        # Stop current epoch and start the next one.  
+        echo "$bench_pid" > "$DT_STOP" 2>>/dev/null || true
+        for ((restart=0; restart<50; restart++)); do
+            kill -0 "$bench_pid" 2>/dev/null || break 2
+            echo "$bench_pid cumulative" > "$DT_START" 2>> /dev/null && break
+            sleep 0.01
+        done
+        epoch_start_ns="$epoch_stop_ns"
     done
 
-    wait "$stopper_pid" 2>/dev/null || true
+    # Final cleanup: stop tracking if it was still running.
+    echo "$bench_pid" > "$DT_STOP" 2>>"$ERR_LOG" || true
 }
 
 measure_wall_tracked() {
@@ -249,14 +266,21 @@ measure_wall_tracked() {
     local t0 t1 bench_pid started=0 tracking_start_ns tracker_pid=""
 
     t0=$(date +%s%N)
-    (cd "$SCRIPT_DIR/$dir" && exec "${cmd[@]}" >/dev/null 2>&1) &
+    (cd "$SCRIPT_DIR/$dir" && exec "${cmd[@]}" >/dev/null 2>>"$ERR_LOG") &
     bench_pid=$!
 
-    # Poll until the CUDA va_space exists and tracking starts successfully.
-    # The write returns -EFAULT if called before cudaMallocManaged, so we
-    # retry until it succeeds or the process exits.
+    # Wait until the UVM va_space is mapped (nvidia-uvm appears in /proc/maps
+    # after the first cudaMallocManaged mmap), then poll DT_START until the
+    # kernel accepts it.  The two-stage wait mirrors run_overhead_benchmark.sh:
+    # the maps check eliminates the bulk of failing attempts before CUDA init.
+    for ((wait=0; wait<200; wait++)); do
+        kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
+        grep -q "nvidia-uvm" /proc/$bench_pid/maps 2>>"$ERR_LOG" && break
+        sleep "$START_POLL_INTERVAL"
+    done
+
     for ((poll=0; poll<200; poll++)); do
-        if echo "$bench_pid cumulative" > "$DT_START" 2>/dev/null; then
+        if echo "$bench_pid cumulative" > "$DT_START" 2>>"$ERR_LOG"; then
             tracking_start_ns=$(date +%s%N)
             started=1
             tracking_window "$bench_pid" "$sleep_interval" "$query_count" "$row_name" "$rep" "$tracking_start_ns" &
@@ -264,7 +288,7 @@ measure_wall_tracked() {
             break
         fi
         # Stop polling if the benchmark already finished.
-        kill -0 "$bench_pid" 2>/dev/null || break
+        kill -0 "$bench_pid" 2>>"$ERR_LOG" || break
         sleep "$START_POLL_INTERVAL"
     done
 
@@ -278,7 +302,7 @@ measure_wall_tracked() {
     # Ensure the stop/query helper is done before the next repetition, but do
     # not include this cleanup wait in the benchmark wall-time measurement.
     if [[ -n "$tracker_pid" ]]; then
-        wait "$tracker_pid" 2>/dev/null || true
+        wait "$tracker_pid" 2>>"$ERR_LOG" || true
     fi
 
     echo "scale=3; ($t1 - $t0) / 1000000000" | bc
@@ -371,4 +395,4 @@ done < <(ordered_benchmarks)
 
 echo ""
 echo "Results saved to $OUT_CSV"
-
+echo "Errors logged to  $ERR_LOG"

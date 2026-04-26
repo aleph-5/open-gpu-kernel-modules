@@ -1,6 +1,0 @@
-.vscode/
-*.h.gch
-*.o
-*exec*
-bfs/sizes.sh
-

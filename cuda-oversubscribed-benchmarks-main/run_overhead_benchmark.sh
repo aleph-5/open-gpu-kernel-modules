@@ -163,6 +163,13 @@ measure_wall_tracked() {
     (cd "$SCRIPT_DIR/$dir" && exec "${cmd[@]}" >/dev/null 2>&1) &
     bench_pid=$!
 
+    # Wait until the benchmark has called cudaMallocManaged. 
+    for ((wait=0; wait<200; wait++)); do
+        kill -0 "$bench_pid" 2>/dev/null || break
+        grep -q "nvidia-uvm" /proc/$bench_pid/maps 2>/dev/null && break
+        sleep $SLEEP_TIME
+    done
+
     # Poll until the CUDA va_space exists and tracking starts successfully.
     # The write returns -EFAULT if called before cudaMallocManaged, so we
     # retry until it succeeds or the process exits.

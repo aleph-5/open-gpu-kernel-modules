@@ -1,6 +1,0 @@
-if [ ! -f Dataset/train/train-first10.arff ]
-then
-	./download_dataset.sh
-fi
-
-./gpu_exec

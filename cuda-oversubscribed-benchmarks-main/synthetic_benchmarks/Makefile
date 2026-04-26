@@ -9,7 +9,6 @@ base:
 	nvcc $(NVCCFLAGS) -o cpu_init.out           cpu_init.cu &
 	nvcc $(NVCCFLAGS) -o gpu_read.out           gpu_read.cu &
 	nvcc $(NVCCFLAGS) -o random_acc.out         random_acc.cu &
-	-make -C stream
 	sleep 2
 
 .PHONY: debug

@@ -6,8 +6,6 @@ MAKE_FLAGS = -B
 
 base:
 	make $(MAKE_FLAGS) -C synthetic_benchmarks $(MAKE_ACTION)
-	make               -C UVMBench/bfs/ clean
-	make               -C UVMBench/bfs/ $(MAKE_ACTION)
 	make $(MAKE_FLAGS) -C nvidia-samples/sgemm/ $(MAKE_ACTION)
 	make $(MAKE_FLAGS) -C polybench/2DCONV $(MAKE_ACTION)
 	make $(MAKE_FLAGS) -C polybench/MVT $(MAKE_ACTION)
@@ -16,7 +14,6 @@ base:
 	make $(MAKE_FLAGS) -C polybench/GEMM $(MAKE_ACTION)
 	make $(MAKE_FLAGS) -C synthetic_benchmarks/ $(MAKE_ACTION)
 	make $(MAKE_FLAGS) -C rodinia/nw $(MAKE_ACTION)
-	make $(MAKE_FLAGS) -C data_structures/hetero-ds-hashtable/ $(MAKE_ACTION)
 
 
 clean: MAKE_ACTION += clean

@@ -9,26 +9,11 @@ The official version of Polybench does not use UVM. However, UVMBench's
 authors ported it to UVM.  
 We have made some modifications to it (see `./polybench/README.md`).
 
-### RAPIDS
-
-RAPIDS is a set of open source CUDA-accelerated ML and data science libraries.
-Many of them use an in-house userspace memory allocator, RMM. By default, most
-do not use UVM, but RMM can be configured to use UVM.  
-We use dataframes (`pandas`, `cudf`) and graph algorithms (`cugraph`).
-
 ### Other Benchmarks
 
-- `UVMBench/bfs` - BFS
 - `rodinia/nw`: Needleman-Wunsch Protein Alignment
-- `nvidia-samples/sgemm`: matrix multiplication
 - Synthetic benchmarks - memset (`int_set_uvm.cu`), random access
   (`random_acc.cu`)
-- `rapids/cugraph_sssp.py`: Single-source shortest paths
-- `rapids/cugraph_pagerank.py`: the pagerank algorithm
-- `rapids/cudf_stdev.py`: Finding the mean and standard deviation of a random
-  array.
-- `data_structures/bptree`: B-Trees on GPUs
-- `data_structures/skiplist`: incomplete
 
 ## Usage
 
