@@ -163,7 +163,7 @@ Per-run dirty-page dumps land in \texttt{/tmp/tracking\_preload\_dumps/}.
 \mainsubsubsection{Plotting Benchmark Results}
 
 The plotting script \texttt{plot\_overhead.py} and requires the csv file
-\texttt{overhead\_results.csv} as input. 
+\texttt{overhead\_results.csv} as input.
 
 The script requires \texttt{matplotlib} and \texttt{numpy}:
 
@@ -185,3 +185,26 @@ overhead_needle.pdf     # Needle wall-time + overhead % (dual panel)
 Each figure plots overhead percentage against working-set size (512\,MB --
 64\,GB).  A shaded region marks the oversubscribed regime (working set exceeds
 GPU memory).
+
+\mainsubsubsection{Backend Comparison}
+
+Recompile once per backend (set \texttt{.ops} in \texttt{uvm\_common.c}, then
+\texttt{sudo ./compile.sh}), then collect stats and plot:
+
+\begin{lstlisting}
+# Usage: sudo bash run_stats_benchmark.sh [MB [stride-4k]]
+# Default: 512 MB, sequential. Pass "stride-4k" for strided access.
+sudo bash run_stats_benchmark.sh 4096 stride-4k   # 4 GB, strided
+python3 plot_backends.py   # writes backend_stride.pdf, backend_gemm.pdf
+\end{lstlisting}
+
+\mainsubsubsection{Query-Frequency Sensitivity}
+
+\begin{lstlisting}
+# Tunables (override via env): SLEEP_INTERVALS, NUM_EPOCHS, REPS, benchmark filter.
+# Defaults: SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00", NUM_EPOCHS="1 5 10", REPS=5.
+# Example: run only int_set_seq at 3 reps, custom epoch counts.
+NUM_EPOCHS="1 3 10" sudo -E bash run_overhead_benchmark_windowed.sh 3 int_set_seq
+python3 plot_query_freq.py   # writes overhead_query_freq.pdf
+\end{lstlisting}
+

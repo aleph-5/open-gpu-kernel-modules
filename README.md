@@ -51,8 +51,13 @@ open-gpu-kernel-modules/
 |   |-- helpers/                   # Shared benchmark helpers
 |   |-- dev/                       # Dev / scratch
 |   |-- perf_logs/                 # Logs from runs
+|   |-- figures/                   # Generated plots
 |   |-- run_overhead_benchmark.sh  # Driver script (REPS, benchmark filter)
 |   |-- run_overhead_benchmark_windowed.sh  # Permuted benchmarks runner
+|   |-- run_stats_benchmark.sh     # Stats/backend comparison runner
+|   |-- plot_backends.py           # Backend comparison plots
+|   |-- plot_overhead.py           # Overhead summary plots
+|   |-- plot_query_freq.py         # Query-frequency plots
 |   |-- overhead_results.csv       # Latest run output
 |   |-- overhead_results_final-vector.csv   # Reference results (vector backend)
 |   |-- Makefile                   # Top-level benchmark build
@@ -286,12 +291,12 @@ sudo python3 run_tests.py
 
 - **Estimated runtime:** ~2–5 min total.
 - **Expected result:** Per-operation ns-resolution costs:
-  - `tc01_basic_rmw` — basic read-modify-write fault path
+  - `tc01_basic_rmw` — basic read-modify-write fault path (stdout)
   - `tc02_duplicate_fault_skip_cost.csv` — cost of FWW skip
   - `tc03_record_contention_cost.csv` — multi-stream insert contention
   - `tc04_single_fault_record_cost.csv` — single-fault record cost
   - `tc05_table_{init,destroy,reinit}_cost.csv` — lifecycle costs
-- **Access:** CSVs alongside the test sources; plot with `performance_tests/plots/plot_*.py`.
+- **Access:** CSVs alongside the test sources; plot with `performance_tests/plots/plot_duplicate_fault.py`, `plot_record_contention.py`, `plot_single_fault.py`, `plot_table_lifecycle.py`, `plot_tc01.py`, `plot_tc02.py`.
 
 #### P3 — Stress (page-miss-rate at high write pressure)
 
@@ -317,7 +322,21 @@ sudo bash run_overhead_benchmark.sh 10 int_set_4k gemm  # REPS=10, specific benc
 
 - **Estimated runtime:** ~30–90 min for the full sweep (7 benchmarks x 8 sizes x 5 reps); use the specific-benchmark form for a quick spot-check (~5–10 min).
 - **Expected result:** `overhead_results.csv` with wall-time tracking OFF vs. ON, overhead percentage, and dirty page count per benchmark x size combination.
-- **Access:** `cuda-oversubscribed-benchmarks-main/overhead_results.csv`
+- **Access:** `cuda-oversubscribed-benchmarks-main/overhead_results.csv`; plot with `plot_overhead.py`.
+
+To compare stats across backends:
+
+```bash
+sudo bash run_stats_benchmark.sh
+python3 plot_backends.py   # per-backend latency comparison
+```
+
+To measure overhead vs. query frequency at a fixed dataset size (512 MB):
+
+```bash
+sudo bash run_overhead_benchmark_windowed.sh
+python3 plot_query_freq.py
+```
 
 #### P5 — Per-operation latency by backend
 
@@ -342,5 +361,8 @@ To test the latency of different data structures:
 ## 8. Pointers to Further Material
 
 - Correctness Tests: [`correctness_tests/`](./correctness_tests/)
-- Performance Tests [`performance_tests/`](./performance_tests/)
-- Benchmarks : [`cuda-oversubscribed-benchmarks-main/`](./cuda-oversubscribed-benchmarks-main/)
+- Performance Tests: [`performance_tests/`](./performance_tests/)
+- Microbenchmark Plots: [`performance_tests/plots/`](./performance_tests/plots/)
+- Benchmarks: [`cuda-oversubscribed-benchmarks-main/`](./cuda-oversubscribed-benchmarks-main/)
+- Modified UVM Driver: [`kernel-open/nvidia-uvm/`](./kernel-open/nvidia-uvm/)
+
