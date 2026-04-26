@@ -147,3 +147,29 @@ Results are saved to \texttt{overhead\_results.csv} (columns:
 \texttt{benchmark}, \texttt{reps}, \texttt{off\_avg\_s}, \texttt{off\_std\_s},
 \texttt{on\_avg\_s}, \texttt{on\_std\_s}, \texttt{overhead\_pct}).
 Per-run dirty-page dumps land in \texttt{/tmp/tracking\_preload\_dumps/}.
+
+\mainsubsubsection{Plotting Benchmark Results}
+
+The plotting script \texttt{plot\_overhead.py} and requires the csv file
+\texttt{overhead\_results.csv} as input. 
+
+The script requires \texttt{matplotlib} and \texttt{numpy}:
+
+\begin{lstlisting}
+# Move into the benchmarks directory and run the script.
+cd cuda-oversubscribed-benchmarks-main
+pip install matplotlib numpy   # if not already installed
+python3 plot_overhead.py
+\end{lstlisting}
+
+Three PDF figures are written to the same directory:
+
+\begin{lstlisting}
+overhead_write.pdf      # int_set 4K-stride vs sequential overhead
+overhead_polybench.pdf  # GEMM, 2MM, BICG, MVT overhead
+overhead_needle.pdf     # Needle wall-time + overhead % (dual panel)
+\end{lstlisting}
+
+Each figure plots overhead percentage against working-set size (512\,MB --
+64\,GB).  A shaded region marks the oversubscribed regime (working set exceeds
+GPU memory).
