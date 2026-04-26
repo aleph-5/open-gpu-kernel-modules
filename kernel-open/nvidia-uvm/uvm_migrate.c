@@ -83,7 +83,6 @@ static NV_STATUS block_migrate_map_unmapped_pages(uvm_va_block_t *va_block,
     NV_STATUS tracker_status;
     uvm_prot_t prot = UVM_PROT_READ_WRITE_ATOMIC;
 
-    // EDIT BY KUSHAGRA: 
     // When dirty tracking is active and pages are
     // being migrated to a GPU, map them read-only so that subsequent GPU
     // writes generate faults and are recorded by the dirty tracking system.
@@ -91,7 +90,6 @@ static NV_STATUS block_migrate_map_unmapped_pages(uvm_va_block_t *va_block,
     // maps pages writable, making write faults invisible to the tracker.
     if (UVM_ID_IS_GPU(dest_id) && uvm_dirty_tracking_started())
         prot = UVM_PROT_READ_ONLY;
-    // END OF EDIT
 
     // Get the mask of unmapped pages because it will change after the
     // first map operation

@@ -66,11 +66,9 @@ NV_STATUS uvm_procfs_init(void)
     if (uvm_proc_cpu == NULL)
         return NV_ERR_OPERATING_SYSTEM;
 
-    // EDIT BY ARUSH
     status = uvm_dirty_procfs_init(uvm_proc_dir);
     if (status != NV_OK)
         return status;
-    // END OF EDIT
 
     return NV_OK;
 }

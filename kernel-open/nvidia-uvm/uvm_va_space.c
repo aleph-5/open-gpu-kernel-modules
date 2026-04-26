@@ -185,9 +185,7 @@ NV_STATUS uvm_va_space_create(struct address_space *mapping, uvm_va_space_t **va
     if (!va_space)
         return NV_ERR_NO_MEMORY;
 
-    // EDIT BY ADITI KHANDELIA
     va_space->owner_tgid = current->tgid;
-    // END OF EDIT
 
     if (flags & ~UVM_INIT_FLAGS_MASK) {
         uvm_kvfree(va_space);
@@ -546,12 +544,10 @@ void uvm_va_space_destroy(uvm_va_space_t *va_space)
 
     nv_kthread_q_flush(&g_uvm_global.global_q);
 
-    // EDIT BY ADITI KHANDELIA
     if (uvm_dirty_tracking_started() && uvm_owner_tgid_with_dirty_tracking_started() == va_space->owner_tgid) {
         if (uvm_dirty_page_table_destroy_lifecycle_locked() != NV_OK)
             UVM_ASSERT_MSG(false, "Failed to destroy dirty page table for va_space with owner tgid %d", va_space->owner_tgid);
     }
-    // END OF EDIT
 
     for_each_gpu_in_mask(gpu, retained_gpus) {
         // Free the processor masks allocated in uvm_va_space_register_gpu().
@@ -2760,7 +2756,7 @@ vm_fault_t uvm_va_space_cpu_fault_hmm(uvm_va_space_t *va_space, struct vm_fault 
     return uvm_va_space_cpu_fault(va_space, vmf, true);
 }
 
-// EDIT BY ARUSH: invalidate all GPU PTEs on dirty-tracking table init/reinit so that
+// invalidate all GPU PTEs on dirty-tracking table init/reinit so that
 // subsequent GPU accesses fault and are recorded in the fresh dirty table.
 static void uvm_dirty_invalidate_all_gpu_mappings(void)
 {
@@ -2812,8 +2808,6 @@ static void uvm_dirty_invalidate_all_gpu_mappings(void)
     uvm_va_block_context_free(block_ctx);
 }
 
-// EDIT BY SANKALP MITTAL
-// EDIT BY ADITI KHANDELIA
 typedef struct {
     uvm_va_space_t *owner_va_space;
     uvm_parent_gpu_t *locked_parent_gpus[UVM_PARENT_ID_MAX_GPUS];
@@ -3114,7 +3108,6 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
             if (!uvm_processor_mask_empty(&gpu_mask)) {
                 uvm_va_block_region_t region = uvm_va_block_region_from_block(va_block);
 
-                // EDIT BY VIDHI JAIN
                 // Snapshot pte_bits[GPU_WRITE] and pte_bits[GPU_ATOMIC] before
                 // revoking so stop can restore exact pre-tracking permissions.
                 uvm_gpu_id_t gpu_id;
@@ -3127,7 +3120,6 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
                     uvm_page_mask_copy(&gpu_state->dirty_downgraded_atomic_pages,
                                        &gpu_state->pte_bits[UVM_PTE_BITS_GPU_ATOMIC]);
                 }
-                // END OF EDIT
 
                 status = uvm_va_block_revoke_prot_mask(va_block, block_ctx, &gpu_mask, region, NULL, UVM_PROT_READ_WRITE);
                 if (status != NV_OK)
@@ -3155,10 +3147,7 @@ out:
 
     return status;
 }
-// END OF EDIT
-// END OF EDIT
 
-// EDIT BY VIDHI JAIN (today)
 static void uvm_dirty_restore_all_permissions(void)
 {
     pid_t owner_tgid = uvm_owner_tgid_with_dirty_tracking_started();
@@ -3230,7 +3219,6 @@ static void uvm_dirty_restore_all_permissions(void)
                                          UVM_PROT_READ_WRITE,
                                          UvmEventMapRemoteCausePolicy);
 
-                    // EDIT BY VIDHI JAIN
                     // Verify every restored page has the expected permission.
                     // Must run after map_mask calls but before zeroing masks.
                     uvm_page_index_t page_index;
@@ -3258,7 +3246,6 @@ static void uvm_dirty_restore_all_permissions(void)
                                    has_write, has_atomic);
                         }
                     }
-                    // END OF EDIT
 
                     uvm_page_mask_zero(&gpu_state->dirty_downgraded_pages);
                     uvm_page_mask_zero(&gpu_state->dirty_downgraded_atomic_pages);
@@ -3275,7 +3262,6 @@ static void uvm_dirty_restore_all_permissions(void)
     uvm_mutex_unlock(&g_uvm_global.va_spaces.lock);
     uvm_va_block_context_free(block_ctx);
 }
-// END OF EDIT
 
 void uvm_va_space_dirty_init(void)
 {
@@ -3285,8 +3271,5 @@ void uvm_va_space_dirty_init(void)
     uvm_dirty_barrier_end_fn = uvm_dirty_barrier_end;
     uvm_dirty_query_barrier_begin_fn = uvm_dirty_query_barrier_begin;
     uvm_dirty_query_barrier_end_fn = uvm_dirty_query_barrier_end;
-    // EDIT BY VIDHI JAIN
     uvm_dirty_restore_fn = uvm_dirty_restore_all_permissions;
-    // END OF EDIT
 }
-// END OF EDIT

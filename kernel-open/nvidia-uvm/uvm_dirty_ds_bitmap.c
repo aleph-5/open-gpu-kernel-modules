@@ -1,4 +1,3 @@
-// EDIT BY ARUSH
 /*******************************************************************************
     Bitmap backend for the dirty-page data structure abstraction layer.
 

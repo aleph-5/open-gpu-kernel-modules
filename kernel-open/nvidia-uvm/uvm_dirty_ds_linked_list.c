@@ -1,4 +1,3 @@
-// EDIT BY SANKALP MITTAL
 /*******************************************************************************
     Linked List backend for the dirty-page data structure abstraction layer.
 
@@ -132,4 +131,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_linked_list_ops = {
     .for_each_in_range = ll_backend_for_each_in_range,
     .destroy           = ll_backend_destroy,
 };
-// END OF EDIT

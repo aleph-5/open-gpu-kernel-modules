@@ -1293,9 +1293,7 @@ NV_STATUS uvm_va_block_create(uvm_va_range_managed_t *managed_range,
     block->end = end;
     block->managed_range = managed_range;
 
-    // EDIT BY VIDHI JAIN
     block->creator_pid = managed_range ? managed_range->creator_pid : current->tgid;
-    //END OF EDIT
 
     uvm_tracker_init(&block->tracker);
     block->prefetch_info.last_migration_proc_id = UVM_ID_INVALID;
@@ -11120,10 +11118,8 @@ static uvm_prot_t compute_new_permission(uvm_va_block_t *va_block,
 
         if (uvm_processor_mask_empty(revoke_processors))
             new_prot = UVM_PROT_READ_WRITE;
-        // EDIT BY ADITI KHANDELIA
         if (uvm_owner_tgid_with_dirty_tracking_started() == va_space->owner_tgid && access_type < UVM_FAULT_ACCESS_TYPE_WRITE)
             new_prot = UVM_PROT_READ_ONLY;
-        // END OF EDIT
     }
 
     if (logical_prot == UVM_PROT_READ_WRITE_ATOMIC && new_prot == UVM_PROT_READ_WRITE) {

@@ -1169,10 +1169,9 @@ static int uvm_init(void)
     bool added_device = false;
     int ret;
 
-    // EDIT BY ARUSH: set the dirty-page GPU-unmap callback before any
+    // set the dirty-page GPU-unmap callback before any
     // module parameter callbacks may be called
     uvm_va_space_dirty_init();
-    // END OF EDIT
 
     NV_STATUS status = uvm_global_init();
     if (status != NV_OK) {

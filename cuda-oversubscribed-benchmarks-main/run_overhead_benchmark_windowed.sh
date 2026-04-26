@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+#!/usr/bin/env bash
 # run_overhead_benchmark.sh
 #
 # Measures dirty-tracking pipeline overhead on real workloads.
@@ -32,7 +33,14 @@ DT_CUTOVER="/proc/driver/nvidia-uvm/dirty_tracking_query_cutover"
 DT_DUMP="/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 
 
-SLEEP_TIME=0.05
+# Tunables. Override like:
+#   SLEEP_INTERVALS="0.01 0.05 0.10 0.50 1.00" QUERY_COUNTS="1 5 10" sudo -E bash run_overhead_benchmark.sh
+# SLEEP_INTERVAL is now the tracking window length: after dirty tracking starts,
+# tracking is stopped after exactly this many seconds. Dirty-page queries are
+# evenly spread inside this window.
+read -ra SLEEP_INTERVALS <<< "${SLEEP_INTERVALS:-0.01 0.05 0.10 0.50 1.00}"
+read -ra QUERY_COUNTS    <<< "${QUERY_COUNTS:-1 5 10}"
+START_POLL_INTERVAL="${START_POLL_INTERVAL:-0.05}"
 
 # ---------------------------------------------------------------------------
 # Preflight checks
@@ -104,8 +112,8 @@ declare -a BENCHMARKS=(
     "2mm_16g|polybench/2MM|./2mm.exe 17179869184"
     "2mm_32g|polybench/2MM|./2mm.exe 34359738368"
     "2mm_40g|polybench/2MM|./2mm.exe 42949672960"
-    "2mm_48g|polybench/2MM|./2mm.exe 51539607552"
-    "2mm_64g|polybench/2MM|./2mm.exe 68719476736"
+    # "2mm_48g|polybench/2MM|./2mm.exe 51539607552"
+    # "2mm_64g|polybench/2MM|./2mm.exe 68719476736"
 
     # --- polybench BICG (read-heavy; overhead should be low — good control) ---
     "bicg_512m|polybench/BICG|./bicg.exe 536870912"
@@ -138,6 +146,22 @@ declare -a BENCHMARKS=(
     "needle_64g|rodinia/nw|./needle -mb 65536"
 )
 
+# Run benchmarks grouped by increasing memory size, so slow large-memory cases
+# do not delay results for smaller memory sizes. Names are expected to end in
+# one of these suffixes, e.g. gemm_4g or int_set_seq_512m.
+read -ra MEMORY_ORDER <<< "${MEMORY_ORDER:-512m 4g 8g 16g 32g 40g 48g 64g}"
+
+ordered_benchmarks() {
+    local size entry bname
+
+    for size in "${MEMORY_ORDER[@]}"; do
+        for entry in "${BENCHMARKS[@]}"; do
+            IFS='|' read -r bname _ <<< "$entry"
+            [[ "$bname" == *_"$size" ]] && echo "$entry"
+        done
+    done
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -154,10 +178,75 @@ measure_wall() {
     echo "scale=3; ($t1 - $t0) / 1000000000" | bc
 }
 
+# Convert a seconds value like 0.05 into integer nanoseconds.
+seconds_to_ns() {
+    awk -v s="$1" 'BEGIN { printf "%.0f", s * 1000000000 }'
+}
+
+# Sleep until an absolute CLOCK_REALTIME timestamp in nanoseconds.
+sleep_until_ns() {
+    local target_ns="$1"
+    local now_ns remaining_ns remaining_s
+
+    now_ns=$(date +%s%N)
+    if (( now_ns < target_ns )); then
+        remaining_ns=$((target_ns - now_ns))
+        remaining_s=$(awk -v ns="$remaining_ns" 'BEGIN { printf "%.9f", ns / 1000000000 }')
+        sleep "$remaining_s"
+    fi
+}
+
+# After tracking has started, query query_count times evenly inside the
+# sleep_interval window, and stop tracking exactly at the end of the window.
+tracking_window() {
+    local bench_pid="$1"
+    local sleep_interval="$2"
+    local query_count="$3"
+    local row_name="$4"
+    local rep="$5"
+    local start_ns="$6"
+
+    local interval_ns stop_ns stopper_pid q target_ns now_ns dump_file pages
+    interval_ns=$(seconds_to_ns "$sleep_interval")
+    stop_ns=$((start_ns + interval_ns))
+
+    # Stop is timed independently of dump/query latency.
+    (
+        sleep_until_ns "$stop_ns"
+        echo "$bench_pid" > "$DT_STOP" 2>/dev/null || true
+    ) &
+    stopper_pid=$!
+
+    # Query times are strictly inside the interval:
+    #   k * sleep_interval / (query_count + 1), k = 1..query_count.
+    for ((q=1; q<=query_count; q++)); do
+        target_ns=$((start_ns + (interval_ns * q) / (query_count + 1)))
+        sleep_until_ns "$target_ns"
+
+        now_ns=$(date +%s%N)
+        (( now_ns >= stop_ns )) && break
+
+        # Stop querying if the benchmark already finished.
+        kill -0 "$bench_pid" 2>/dev/null || break
+
+        dump_file="$DUMP_DIR/${row_name}_rep${rep}_query${q}_pid_${bench_pid}.txt"
+        echo "$bench_pid" > "$DT_CUTOVER" 2>/dev/null || true
+        cat "$DT_DUMP" > "$dump_file" 2>/dev/null || true
+        pages=$(grep -c '^0x' "$dump_file" 2>/dev/null || true)
+        echo "  [tracking] ${row_name} rep=${rep} query=${q}/${query_count}: dirty pages: ${pages}  (dump -> ${dump_file})" >&2
+    done
+
+    wait "$stopper_pid" 2>/dev/null || true
+}
+
 measure_wall_tracked() {
+    local sleep_interval="$1"; shift
+    local query_count="$1"; shift
+    local row_name="$1"; shift
+    local rep="$1"; shift
     local dir="$1"; shift
     local cmd=("$@")
-    local t0 t1 bench_pid started=0
+    local t0 t1 bench_pid started=0 tracking_start_ns tracker_pid=""
 
     t0=$(date +%s%N)
     (cd "$SCRIPT_DIR/$dir" && exec "${cmd[@]}" >/dev/null 2>&1) &
@@ -168,12 +257,15 @@ measure_wall_tracked() {
     # retry until it succeeds or the process exits.
     for ((poll=0; poll<200; poll++)); do
         if echo "$bench_pid cumulative" > "$DT_START" 2>/dev/null; then
+            tracking_start_ns=$(date +%s%N)
             started=1
+            tracking_window "$bench_pid" "$sleep_interval" "$query_count" "$row_name" "$rep" "$tracking_start_ns" &
+            tracker_pid=$!
             break
         fi
         # Stop polling if the benchmark already finished.
         kill -0 "$bench_pid" 2>/dev/null || break
-        sleep $SLEEP_TIME
+        sleep "$START_POLL_INTERVAL"
     done
 
     if [[ $started -eq 0 ]]; then
@@ -183,17 +275,20 @@ measure_wall_tracked() {
     wait "$bench_pid"
     t1=$(date +%s%N)
 
-    if [[ $started -eq 1 ]]; then
-        local dump_file="$DUMP_DIR/pid_${bench_pid}.txt"
-        echo "$bench_pid" > "$DT_CUTOVER" 2>/dev/null || true
-        cat "$DT_DUMP" > "$dump_file" 2>/dev/null
-        local pages
-        pages=$(grep -c '^0x' "$dump_file" 2>/dev/null; true)
-        echo "  [tracking] dirty pages: $pages  (dump -> $dump_file)" >&2
-        echo "$bench_pid" > "$DT_STOP" 2>/dev/null || true
+    # Ensure the stop/query helper is done before the next repetition, but do
+    # not include this cleanup wait in the benchmark wall-time measurement.
+    if [[ -n "$tracker_pid" ]]; then
+        wait "$tracker_pid" 2>/dev/null || true
     fi
 
     echo "scale=3; ($t1 - $t0) / 1000000000" | bc
+}
+
+# Convert values like 0.05 into safe CSV row-name tokens like 0p05.
+tagify() {
+    local s="$1"
+    s="${s//./p}"
+    echo "$s"
 }
 
 # Compute average and stddev of a space-separated list of numbers.
@@ -212,9 +307,10 @@ EOF
 # Main loop
 # ---------------------------------------------------------------------------
 
-echo "benchmark,reps,off_avg_s,off_std_s,on_avg_s,on_std_s,overhead_pct" | tee "$OUT_CSV"
+echo "row_name,benchmark,sleep_interval_s,queries_per_epoch,reps,off_avg_s,off_std_s,on_avg_s,on_std_s,overhead_pct" | tee "$OUT_CSV"
 
-for entry in "${BENCHMARKS[@]}"; do
+while IFS= read -r entry; do
+	echo $entry
     IFS='|' read -r name dir cmd_str <<< "$entry"
     read -ra cmd <<< "$cmd_str"
 
@@ -234,7 +330,7 @@ for entry in "${BENCHMARKS[@]}"; do
         continue
     fi
 
-    echo -n "  $name (OFF) ... " >&2
+    echo -n "  $name (OFF baseline) ... " >&2
     off_times=()
     for ((i=0; i<REPS; i++)); do
         t=$(measure_wall "$dir" "${cmd[@]}")
@@ -242,28 +338,37 @@ for entry in "${BENCHMARKS[@]}"; do
         echo -n "." >&2
     done
     echo " done" >&2
-
-    echo -n "  $name (ON)  ... " >&2
-    on_times=()
-    for ((i=0; i<REPS; i++)); do
-        t=$(measure_wall_tracked "$dir" "${cmd[@]}")
-        on_times+=("$t")
-        echo -n "." >&2
-    done
-    echo " done" >&2
-
     read -r off_avg off_std <<< "$(stats "${off_times[@]}")"
-    read -r on_avg  on_std  <<< "$(stats "${on_times[@]}")"
 
-    overhead=$(python3 -c "
+    for sleep_interval in "${SLEEP_INTERVALS[@]}"; do
+        sleep_tag=$(tagify "$sleep_interval")
+
+        for query_count in "${QUERY_COUNTS[@]}"; do
+            row_name="${name}__sleep_${sleep_tag}__queries_${query_count}"
+
+            echo -n "  $row_name (ON) ... " >&2
+            on_times=()
+            for ((i=0; i<REPS; i++)); do
+                t=$(measure_wall_tracked "$sleep_interval" "$query_count" "$row_name" "$i" "$dir" "${cmd[@]}")
+                on_times+=("$t")
+                echo -n "." >&2
+            done
+            echo " done" >&2
+
+            read -r on_avg on_std <<< "$(stats "${on_times[@]}")"
+
+            overhead=$(python3 -c "
 off=$off_avg; on=$on_avg
 pct = 100.0 * (on - off) / off if off > 0 else 0.0
 print(f'{pct:+.1f}')
 ")
 
-    row="$name,$REPS,$off_avg,$off_std,$on_avg,$on_std,$overhead"
-    echo "$row" | tee -a "$OUT_CSV"
-done
+            row="$row_name,$name,$sleep_interval,$query_count,$REPS,$off_avg,$off_std,$on_avg,$on_std,$overhead"
+            echo "$row" | tee -a "$OUT_CSV"
+        done
+    done
+done < <(ordered_benchmarks)
 
 echo ""
 echo "Results saved to $OUT_CSV"
+

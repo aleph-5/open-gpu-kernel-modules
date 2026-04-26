@@ -703,7 +703,6 @@ NV_STATUS uvm_gpu_fault_buffer_flush(uvm_gpu_t *gpu)
     return status;
 }
 
-// EDIT BY ADITI KHANDELIA
 NV_STATUS uvm_parent_gpu_fault_buffer_flush_locked(uvm_parent_gpu_t *parent_gpu)
 {
     UVM_ASSERT(parent_gpu->replayable_faults_supported);
@@ -715,7 +714,6 @@ NV_STATUS uvm_parent_gpu_fault_buffer_flush_locked(uvm_parent_gpu_t *parent_gpu)
         UVM_FAULT_REPLAY_TYPE_START,
         NULL);
 }
-// END OF EDIT
 
 static inline int cmp_fault_instance_ptr(const uvm_fault_buffer_entry_t *a,
                                          const uvm_fault_buffer_entry_t *b)
@@ -1605,14 +1603,9 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
 
         ++page_fault_count;
 
-		NvU64 fault_addr = va_block->start + ((NvU64)page_index << PAGE_SHIFT);
-
-        // EDIT BY ADITI KHANDELIA
-
         if (uvm_dirty_tracking_active() && service_access_type >= UVM_FAULT_ACCESS_TYPE_WRITE) {
             unsigned long page_number = current_entry->fault_address >> PAGE_SHIFT;
 
-            // EDIT BY VIDHI JAIN
             NV_STATUS result = uvm_dirty_page_table_record(page_number, ktime_get_ns());
 
             if (result != NV_OK) {
@@ -1620,10 +1613,8 @@ static NV_STATUS service_fault_batch_block_locked(uvm_gpu_t *gpu,
                        page_number, current_entry->fault_address);
 
             }
-            // END OF EDIT
 
         }
-        // EDIT OF EDIT
 
         block_context->access_type[page_index] = service_access_type;
 

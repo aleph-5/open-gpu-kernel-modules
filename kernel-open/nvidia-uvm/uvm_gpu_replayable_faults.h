@@ -67,9 +67,7 @@ bool uvm_parent_gpu_replayable_faults_pending(uvm_parent_gpu_t *parent_gpu);
 // LOCKING: Takes gpu->isr_lock
 NV_STATUS uvm_gpu_fault_buffer_flush(uvm_gpu_t *gpu);
 
-// EDIT BY ADITI KHANDELIA
 NV_STATUS uvm_parent_gpu_fault_buffer_flush_locked(uvm_parent_gpu_t *parent_gpu);
-// END OF EDIT
 
 // Enable/disable HW support for prefetch-initiated faults
 void uvm_parent_gpu_enable_prefetch_faults(uvm_parent_gpu_t *parent_gpu);

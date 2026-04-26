@@ -195,9 +195,7 @@ static uvm_va_range_managed_t *uvm_va_range_alloc_managed(uvm_va_space_t *va_spa
 
     managed_range->policy = uvm_va_policy_default;
 
-    // EDIT BY ADITI KHANDELIA
     managed_range->creator_pid = current->tgid;
-    // END OF EDIT
 
     managed_range->va_range.blocks = uvm_kvmalloc_zero(uvm_va_range_num_blocks(managed_range) *
                                                        sizeof(managed_range->va_range.blocks[0]));

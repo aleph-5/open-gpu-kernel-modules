@@ -2,21 +2,15 @@ NVIDIA_UVM_SOURCES ?=
 NVIDIA_UVM_SOURCES_CXX ?=
 
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_common.c
-# EDIT BY KUSHAGRA
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_xarray.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_bitmap.c
-# END OF EDIT
 
-# EDIT BY VIDHI JAIN
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_vector.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_vector_unsorted.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_chunked.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_nested_bitmap.c
-# END OF EDIT
 
-# EDIT BY SANKALP MITTAL
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_dirty_ds_linked_list.c
-# END OF EDIT
 
 NVIDIA_UVM_SOURCES += nvidia-uvm/uvm_linux.c
 NVIDIA_UVM_SOURCES += nvidia-uvm/nvstatus.c

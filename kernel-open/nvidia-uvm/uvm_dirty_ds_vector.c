@@ -1,4 +1,3 @@
-// EDIT BY VIDHI JAIN
 /*******************************************************************************
     Vector backend for the dirty-page data structure abstraction layer.
 
@@ -12,7 +11,6 @@
 #include <linux/slab.h>
 
 #include <linux/vmalloc.h>
-// #include <linux/spinlock.h>
 #include <linux/string.h>
 
 #define VEC_INITIAL_CAPACITY  64u
@@ -191,4 +189,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_vector_ops = {
     .destroy           = vec_backend_destroy,
 };
 
-// END OF EDIT

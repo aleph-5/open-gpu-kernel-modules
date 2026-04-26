@@ -1,4 +1,3 @@
-// EDIT BY VIDHI JAIN
 /*******************************************************************************
     Chunked-vector backend for the dirty-page data structure abstraction layer.
     
@@ -422,5 +421,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_chunked_ops = {
     .for_each_in_range = chunked_backend_for_each_in_range,
     .destroy           = chunked_backend_destroy,
 };
-
-// END OF EDIT

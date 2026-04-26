@@ -180,11 +180,8 @@ bool uvm_va_space_mm_enabled(uvm_va_space_t *va_space)
 }
 
 
-// ADITI : uvm_va_space_t is per UVM VA space instance
-// ADITI : Registers the mm with a va space
 NV_STATUS uvm_va_space_mm_register(uvm_va_space_t *va_space)
 {
-    printk(KERN_INFO "NVIDIA UVM DRIVER : The name of the process is %s\n", current->comm);
     uvm_va_space_mm_t *va_space_mm = &va_space->va_space_mm;
 
     uvm_assert_mmap_lock_locked_write(current->mm);

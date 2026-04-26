@@ -1,4 +1,3 @@
-// EDIT BY KUSHAGRA
 /*******************************************************************************
     xarray backend for the dirty-page data structure abstraction layer.
 
@@ -93,4 +92,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_xarray_ops = {
     .for_each_in_range = xa_backend_for_each_in_range,
     .destroy           = xa_backend_destroy,
 };
-// END OF EDIT

@@ -1,4 +1,3 @@
-// EDIT BY VIDHI JAIN
 /*******************************************************************************
     Unsorted vector backend for the dirty-page data structure abstraction layer.
 
@@ -164,4 +163,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_vector_unsorted_ops = {
     .destroy           = vec_unsorted_backend_destroy,
 };
 
-// END OF EDIT

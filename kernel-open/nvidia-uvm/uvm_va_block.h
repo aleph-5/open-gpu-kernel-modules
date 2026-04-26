@@ -228,7 +228,6 @@ typedef struct
     // Set of pages using EGM mappings.
     uvm_page_mask_t egm_pages;
 
-	// EDIT BY VIDHI JAIN
     // Pages that had READ_WRITE (or ATOMIC) permission when dirty tracking started
     // Snapshot of pte_bits[GPU_WRITE] taken just before we downgrade
     uvm_page_mask_t dirty_downgraded_pages;
@@ -236,7 +235,6 @@ typedef struct
     // Snapshot of pte_bits[GPU_ATOMIC] taken just before we downgrade
     // Both masks used at stop to restore exact pre-tracking permissions
     uvm_page_mask_t dirty_downgraded_atomic_pages;
-    // END OF EDIT
 
 } uvm_va_block_gpu_state_t;
 
@@ -315,9 +313,7 @@ struct uvm_va_block_struct
     NvU64 start;
     NvU64 end;
 
-	// EDIT BY VIDHI JAIN
 	pid_t creator_pid;
-	// END OF EDIT
 
     // Per-processor residency bit vector, used for fast lookup of which
     // processors are active in this block.

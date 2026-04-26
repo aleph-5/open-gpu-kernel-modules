@@ -1,4 +1,3 @@
-// EDIT BY VIDHI JAIN
 /*******************************************************************************
     Nested-bitmap backend for the dirty-page data structure abstraction layer.
 
@@ -150,4 +149,3 @@ const struct uvm_dirty_ds_ops uvm_dirty_ds_nested_bitmap_ops = {
     .for_each_in_range = nb_backend_for_each_in_range,
     .destroy           = nb_backend_destroy,
 };
-// END OF EDIT
