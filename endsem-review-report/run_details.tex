@@ -116,6 +116,18 @@ sudo python3 run_tests.py --no-build
 sudo python3 run_tests.py --verbose
 \end{lstlisting}
 
+\mainsubsection{Performance Tests}
+\begin{lstlisting}
+# Run a single suite.
+cd performance_tests/<suite_name> && sudo python3 run_tests.py
+
+# Run specific test cases within a suite (matched by name prefix).
+sudo python3 run_tests.py tc01 tc03
+
+# Show stdout even for passing tests.
+sudo python3 run_tests.py --verbose
+\end{lstlisting}
+
 \mainsubsection{Benchmarks}
 
 All benchmark commands must be run from the
