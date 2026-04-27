@@ -14,6 +14,8 @@ This document is the artifact-evaluation roadmap for the project.
 ```
 open-gpu-kernel-modules/
 |
+|-- CS614-Dirty-Tracking-Report.pdf# Project Report
+|
 |-- kernel-open/nvidia-uvm/        # Modified NVIDIA UVM driver
 |
 |-- correctness_tests/             # 16 CUDA correctness suites + run_all.py
@@ -360,6 +362,7 @@ To test the latency of different data structures:
 
 ## 8. Pointers to Further Material
 
+- Project Report: [`CS614-Dirty-Tracking-Report.pdf`](./CS614-Dirty-Tracking-Report.pdf)
 - Correctness Tests: [`correctness_tests/`](./correctness_tests/)
 - Performance Tests: [`performance_tests/`](./performance_tests/)
 - Microbenchmark Plots: [`performance_tests/plots/`](./performance_tests/plots/)

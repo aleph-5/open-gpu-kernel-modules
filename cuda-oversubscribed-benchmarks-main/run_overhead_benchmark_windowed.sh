@@ -41,7 +41,7 @@ DT_DUMP="/proc/driver/nvidia-uvm/dirty_tracking_query_dump"
 # NUM_EPOCHS is the number of queries doen within a tracking interval
 read -ra SLEEP_INTERVALS <<< "${SLEEP_INTERVALS:-0.01 0.05 0.10 0.50 1.00}"
 read -ra NUM_EPOCHS    <<< "${NUM_EPOCHS:-1 5 10}"
-START_POLL_INTERVAL="${START_POLL_INTERVAL:-0.05}"
+START_POLL_INTERVAL="${START_POLL_INTERVAL:-0.10}"
 
 # ---------------------------------------------------------------------------
 # Preflight checks
@@ -79,7 +79,7 @@ declare -a BENCHMARKS=(
     # --- int_set_uvm (pure write, 4K stride): uses -mb flag ---
     # fits in GPU (A40 ~45GB): 512MB, 4GB, 8GB, 16GB, 32GB, 40GB
     # oversubscribed:          48GB, 64GB
-    "int_set_4k_512m|synthetic_benchmarks|./int_set_uvm.out -mb 512 -stride-4k"
+    # "int_set_4k_512m|synthetic_benchmarks|./int_set_uvm.out -mb 512 -stride-4k"
     "int_set_4k_4g|synthetic_benchmarks|./int_set_uvm.out -mb 4096 -stride-4k"
     "int_set_4k_8g|synthetic_benchmarks|./int_set_uvm.out -mb 8192 -stride-4k"
     "int_set_4k_16g|synthetic_benchmarks|./int_set_uvm.out -mb 16384 -stride-4k"
@@ -89,7 +89,7 @@ declare -a BENCHMARKS=(
     "int_set_4k_64g|synthetic_benchmarks|./int_set_uvm.out -mb 65536 -stride-4k"
 
     # --- int_set_uvm (sequential, no stride): same size sweep ---
-    "int_set_seq_512m|synthetic_benchmarks|./int_set_uvm.out -mb 512"
+    # "int_set_seq_512m|synthetic_benchmarks|./int_set_uvm.out -mb 512"
     "int_set_seq_4g|synthetic_benchmarks|./int_set_uvm.out -mb 4096"
     "int_set_seq_8g|synthetic_benchmarks|./int_set_uvm.out -mb 8192"
     "int_set_seq_16g|synthetic_benchmarks|./int_set_uvm.out -mb 16384"
@@ -99,7 +99,7 @@ declare -a BENCHMARKS=(
     "int_set_seq_64g|synthetic_benchmarks|./int_set_uvm.out -mb 65536"
 
     # --- polybench GEMM: first arg is working-set size in bytes ---
-    "gemm_512m|polybench/GEMM|./gemm.exe 536870912"
+    # "gemm_512m|polybench/GEMM|./gemm.exe 536870912"
     "gemm_4g|polybench/GEMM|./gemm.exe 4294967296"
     "gemm_8g|polybench/GEMM|./gemm.exe 8589934592"
     "gemm_16g|polybench/GEMM|./gemm.exe 17179869184"
@@ -109,7 +109,7 @@ declare -a BENCHMARKS=(
     "gemm_64g|polybench/GEMM|./gemm.exe 68719476736"
 
     # --- polybench 2MM ---
-    "2mm_512m|polybench/2MM|./2mm.exe 536870912"
+    # "2mm_512m|polybench/2MM|./2mm.exe 536870912"
     "2mm_4g|polybench/2MM|./2mm.exe 4294967296"
     "2mm_8g|polybench/2MM|./2mm.exe 8589934592"
     "2mm_16g|polybench/2MM|./2mm.exe 17179869184"
@@ -119,7 +119,7 @@ declare -a BENCHMARKS=(
     # "2mm_64g|polybench/2MM|./2mm.exe 68719476736"
 
     # --- polybench BICG (read-heavy; overhead should be low — good control) ---
-    "bicg_512m|polybench/BICG|./bicg.exe 536870912"
+    # "bicg_512m|polybench/BICG|./bicg.exe 536870912"
     "bicg_4g|polybench/BICG|./bicg.exe 4294967296"
     "bicg_8g|polybench/BICG|./bicg.exe 8589934592"
     "bicg_16g|polybench/BICG|./bicg.exe 17179869184"
@@ -129,7 +129,7 @@ declare -a BENCHMARKS=(
     "bicg_64g|polybench/BICG|./bicg.exe 68719476736"
 
     # --- polybench MVT (with read-mostly hint) ---
-    "mvt_512m|polybench/MVT|./mvt.exe 536870912"
+    # "mvt_512m|polybench/MVT|./mvt.exe 536870912"
     "mvt_4g|polybench/MVT|./mvt.exe 4294967296"
     "mvt_8g|polybench/MVT|./mvt.exe 8589934592"
     "mvt_16g|polybench/MVT|./mvt.exe 17179869184"
@@ -139,7 +139,7 @@ declare -a BENCHMARKS=(
     "mvt_64g|polybench/MVT|./mvt.exe 68719476736"
 
     # --- needle (rodinia): uses -mb flag ---
-    "needle_512m|rodinia/nw|./needle -mb 512"
+    # "needle_512m|rodinia/nw|./needle -mb 512"
     "needle_4g|rodinia/nw|./needle -mb 4096"
     "needle_8g|rodinia/nw|./needle -mb 8192"
     "needle_16g|rodinia/nw|./needle -mb 16384"
@@ -248,8 +248,11 @@ tracking_window() {
         for ((restart=0; restart<50; restart++)); do
             kill -0 "$bench_pid" 2>/dev/null || break 2
             echo "$bench_pid cumulative" > "$DT_START" 2>> /dev/null && break
-            sleep 0.01
+            sleep $START_POLL_INTERVAL
         done
+		if ! echo "$bench_pid cumulative" > "$DT_START" 2>/dev/null; then
+			echo "  [warn] DT_START restart failed for pid $bench_pid after 50 retries" >&2
+		fi
         tracking_interval_start_ns="$tracking_interval_stop_ns"
     done
 

@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Read(//tmp/tracking_preload_dumps/**)"
-    ]
-  }
-}
