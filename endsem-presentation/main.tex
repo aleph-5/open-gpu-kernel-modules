@@ -1,0 +1,53 @@
+%    PACKAGES AND THEMES
+
+\documentclass[aspectratio=169,xcolor=dvipsnames]{beamer}
+\usetheme{Frankfurt}
+
+\usepackage{hyperref}
+\usepackage{verbatim}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usepackage{amsmath}
+\usetikzlibrary{arrows.meta,positioning,calc,backgrounds,shapes.geometric,shapes.multipart}
+\setbeamersize{text margin left=3mm, text margin right=3mm}
+\setbeamertemplate{headline}{}
+
+\newcommand{\shellcmd}[1]{%
+  \colorbox{black!10}{\parbox{0.93\linewidth}{\footnotesize\ttfamily #1}}%
+}
+
+%    TITLE PAGE
+
+\title{Low-Overhead Dirty Access Tracking in GPU-UVM}
+\author{Aditi Khandelia \and Arush Upadhyaya \and Kushagra Srivastava \and Sankalp Mittal \and Vidhi Jain}
+\date{}
+\institute
+{
+    \parbox{\textwidth}{\centering
+    CS614 : Linux Kernel Programming \\
+    Department of Computer Science and Engineering \\
+    Indian Institute of Technology Kanpur}
+}
+
+
+%    PRESENTATION SLIDES
+
+\begin{document}
+
+\begin{frame}
+    \titlepage
+\end{frame}
+
+\begin{frame}{Overview}
+    \tableofcontents
+\end{frame}
+
+\input{introduction}
+\input{motivation}
+\input{methodology}
+\input{testing_analysis}
+\input{future_work}
+\input{conclusion}
+
+\end{document}

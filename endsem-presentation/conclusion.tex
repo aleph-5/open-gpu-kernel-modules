@@ -1,0 +1,10 @@
+\section{Conclusion}
+
+\begin{frame}{Conclusion}
+\begin{itemize}
+    \item The GPU fault path is a natural and sufficient instrumentation point. Dirty tracking does not require hardware extensions, compiler changes, or application modification
+    \item Forcing pages to \texttt{READ\_ONLY} and recording on the first write fault is the right primitive: it gives exact, timestamped, per-page write identity at the cost only of writes, not reads
+    \item Strong lifecycle guarantees matter more than raw performance. The determinism of \texttt{start}, \texttt{pause}, \texttt{resume}, and cutover is what makes the system trustworthy enough to drive live migration and checkpointing
+    \item Overhead is fundamentally proportional to write-fault density; compute-bound kernels that amortise faults over long runtimes see negligible cost, which is exactly the workload profile that benefits most from dirty tracking
+\end{itemize}
+\end{frame}

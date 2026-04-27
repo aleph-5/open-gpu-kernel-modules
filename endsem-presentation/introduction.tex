@@ -1,0 +1,11 @@
+\section{Introduction}
+
+\begin{frame}{Introduction}
+\begin{itemize}
+    \item NVIDIA's \textbf{Unified Virtual Memory (UVM)} subsystem underpins \texttt{cudaMallocManaged} and manages demand-paging between host and device via a hardware fault-driven path
+    \item UVM exposes no interface for querying which pages a process has modified; any system requiring this must conservatively copy the \textbf{entire} GPU memory footprint
+    \item We implement \textbf{per-process dirty page tracking} directly within the open-source NVIDIA UVM kernel module, augmenting the write-fault servicing path without additional hardware overhead
+    \item Each recorded write carries a \textbf{nanosecond-resolution timestamp}, enabling precise ordering of writes across epochs and across CPU-GPU phases
+    \item A \texttt{procfs}-based interface exposes start, stop, pause, resume, and atomic cutover snapshot operations to a privileged user with \textbf{page-level granularity}
+\end{itemize}
+\end{frame}
