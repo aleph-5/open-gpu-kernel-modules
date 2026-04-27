@@ -1,7 +1,148 @@
 \section{Testing and Analysis}
-\begin{frame}{Correctness Testing}{Summary}
+
+% -- Correctness: summary table ------------------------------------------------
+\begin{frame}{Correctness Testing}{Suite Summary --- 74/74 Passed}
+\vspace{-2mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lp{8.5cm}c}
+\toprule
+\textbf{Suite} & \textbf{What is tested} & \textbf{Pass} \\
+\midrule
+\texttt{table\_lifecycle}        & Create/destroy cycles, reinit, two allocs one session              & 5/5 \\
+\texttt{ordering}                & Pre-start exclusion, monotonic timestamps, epoch isolation         & 8/8 \\
+\texttt{determinism}             & Cutover border accuracy, pause/resume semantics                    & 2/2 \\
+\texttt{first\_write\_wins}      & Re-write preserves timestamp; 64 concurrent streams $\to$ 1 entry & 3/3 \\
+\texttt{cumulative\_mode}        & Cross-epoch accumulation, delta reset, FWW across epochs           & 4/4 \\
+\texttt{address\_range\_filter} & Multi-alloc isolation, sub-page rounding, pre-start PTEs           & 5/5 \\
+\texttt{access\_type\_filter}   & Reads leave no trace; atomics recorded; prefetch excluded          & 4/4 \\
+\texttt{snapshot\_isolation}     & Post-cutover exclusion, empty-epoch, concurrent inserts safe       & 4/4 \\
+\texttt{backend\_correctness}    & Alignment, no duplicates, sparse patterns, cross-epoch ordering    & 9/9 \\
+\texttt{procfs\_robustness}      & EBUSY, EINVAL, wrong-PID stop, double cutover, malformed input     & 8/8 \\
+\texttt{lifecycle\_races}        & Stop-under-write, rapid cycling, two-process EBUSY, owner death   & 7/7 \\
+\texttt{scale}                   & 100K pages, incremental growth, paginated reads, bitmap limits     & 4/4 \\
+\texttt{stats\_accuracy}         & Insert count, counter reset, lock-wait non-neg, default-off        & 4/4 \\
+\texttt{footprint\_clearing}     & RW restored after stop, no spurious grants, idempotent cycles      & 3/3 \\
+\texttt{tracking\_hints}         & SEQ/RAND hint correctness, inter-session hint switching            & 3/3 \\
+\texttt{generic}                 & Integration smoke-test covering all core procfs behaviors          & 1/1 \\
+\midrule
+\textbf{Total}                   &                                                                    & \textbf{74/74} \\
+\bottomrule
+\end{tabular}
+\end{center}
 \end{frame}
 
+% -- Correctness: running instructions (cascading) -----------------------------
+\begin{frame}[fragile,shrink=25]{Correctness Testing}{Running the Tests}
+\begin{block}{Run all 16 suites (74 tests, $\approx$10 min)}
+\shellcmd{sudo python3 correctness\_tests/run\_all.py}
+\end{block}
+\pause
+\begin{block}{Run a single suite}
+\shellcmd{cd correctness\_tests/ordering \&\& sudo python3 run\_tests.py}
+\end{block}
+\pause
+\begin{block}{Run one test inside a suite}
+\shellcmd{sudo python3 run\_tests.py tc01}
+\end{block}
+\pause
+\begin{block}{Useful flags}
+\shellcmd{sudo python3 run\_tests.py --no-build\quad\#\ skip recompile}\\
+\shellcmd{sudo python3 run\_tests.py --verbose\quad\#\ show stdout of passing tests}
+\end{block}
+\end{frame}
 
-\begin{frame}{Performance Testing}{Summary}
+% -- Performance: overhead table -----------------------------------------------
+\begin{frame}{Performance Testing}{Overhead by Benchmark and Working-Set Size}
+\vspace{-3mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.15cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.2cm}
+  >{\centering\arraybackslash}p{1.0cm}
+  >{\centering\arraybackslash}p{0.95cm}
+  >{\centering\arraybackslash}p{1.0cm}
+  >{\centering\arraybackslash}p{0.95cm}
+  >{\centering\arraybackslash}p{1.2cm}
+}
+\toprule
+\textbf{Size} &
+\textbf{4K stride} &
+\textbf{Seq.} &
+\textbf{GEMM} &
+\textbf{2MM} &
+\textbf{BICG} &
+\textbf{MVT} &
+\textbf{Needle} \\
+\midrule
+512\,MB  & $+57.5\%$    & $+15.7\%$   & $+26.0\%$   & $+21.5\%$ & $+26.9\%$   & $+31.7\%$   & $+113.9\%$ \\
+4\,GB    & $+372.3\%$   & $+163.4\%$  & $+19.3\%$   & $+67.2\%$ & $+131.1\%$  & $+131.7\%$  & $+871.0\%$ \\
+8\,GB    & $+659.9\%$   & $+302.9\%$  & $+15.1\%$   & $+39.6\%$ & $+171.3\%$  & $+153.1\%$  & $+959.8\%$ \\
+16\,GB   & $+1108.2\%$  & $+457.9\%$  & $+13.0\%$   & $+11.2\%$ & $+191.0\%$  & $+178.4\%$  & $+871.5\%$ \\
+32\,GB   & $+1537.6\%$  & $+630.0\%$  & $+207.6\%$  & $+9.8\%$  & $+257.9\%$  & $+265.2\%$  & $+0.6\%$   \\
+40\,GB   & $+1688.3\%$  & $+703.2\%$  & $+258.8\%$  & $+9.1\%$  & $+264.6\%$  & $+257.0\%$  & $+19.1\%$  \\
+\textit{48\,GB}$^\dagger$ & \textit{$+1730.7\%$} & \textit{$+699.4\%$} & \textit{$+213.1\%$} & \textit{---} & \textit{$+263.6\%$} & \textit{$+290.6\%$} & \textit{$+27.8\%$} \\
+\textit{64\,GB}$^\dagger$ & \textit{$+1547.1\%$} & \textit{$+648.6\%$} & \textit{$+261.6\%$} & \textit{---} & \textit{$+208.4\%$} & \textit{$+253.5\%$} & \textit{$+11.8\%$} \\
+\bottomrule
+\end{tabular}
+
+\vspace{1mm}
+{\tiny Tracking ON vs.\ OFF wall time, averaged over 5 runs.
+\emph{4K stride}/\emph{Seq.} = \texttt{int\_set\_uvm} variants.
+$^\dagger$\,Oversubscribed (exceeds GPU VRAM). 2MM oversubscribed runs not collected.}
+\end{center}
+\end{frame}
+
+% -- Benchmark workload descriptions -------------------------------------------
+\begin{frame}{Performance Testing}{Benchmark Workload Descriptions}
+\vspace{-2mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lp{2.8cm}p{6.5cm}}
+\toprule
+\textbf{Benchmark} & \textbf{Access Pattern} & \textbf{Description} \\
+\midrule
+\textbf{4K stride}   & Strided writes        & Custom kernel: writes every 4\,KB page once in stride order; stresses worst-case fault rate (every page is a new write fault) \\
+\textbf{Seq.}        & Sequential writes     & Same custom kernel with sequential page writes; tests tracking overhead under a linear scan \\
+\textbf{GEMM}        & Dense matrix read/write & General matrix multiply (PolyBench); large working set with reuse - most pages written once \\
+\textbf{2MM}         & Dense matrix chain    & Two matrix multiplications chained (PolyBench); higher arithmetic intensity than GEMM, fewer write faults per byte \\
+\textbf{BICG}        & Sparse-style access   & BiCG linear solver (PolyBench); mixed row/column scans over matrices, irregular write pattern \\
+\textbf{MVT}         & Vector-matrix         & Matrix-vector transpose product (PolyBench); two passes over the same matrix, moderate reuse \\
+\textbf{Needle}      & DP table fill         & Needleman-Wunsch sequence alignment (Rodinia); diagonal wavefront writes into a 2-D DP table \\
+\bottomrule
+\end{tabular}
+
+\vspace{1mm}
+{\tiny \emph{4K stride} and \emph{Seq.}\ are custom \texttt{int\_set\_uvm} microbenchmarks.
+PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscription support.}
+\end{center}
+\end{frame}
+
+% -- Performance: running instructions (cascading) -----------------------------
+\begin{frame}[fragile,shrink=25]{Performance Testing}{Running the Benchmarks}
+\begin{block}{General overhead (sequential \& random write patterns)}
+\shellcmd{cd performance\_tests/general\_performance \&\& make}\\
+\shellcmd{sudo ./tc01\_performance\_overhead > results\_seq.csv}\\
+\shellcmd{sudo ./tc02\_random\_write\_overhead > results\_rand.csv}
+\end{block}
+\pause
+\begin{block}{Per-operation microbenchmarks (insert / for-each latencies)}
+\shellcmd{cd performance\_tests/operation\_microbenchmarks}\\
+\shellcmd{sudo python3 run\_tests.py}
+\end{block}
+\pause
+\begin{block}{Stress test}
+\shellcmd{cd performance\_tests/stress\_tests \&\& make}\\
+\shellcmd{sudo ./tc01\_stress\_testing}
+\end{block}
+\pause
+\begin{block}{Cross-benchmark overhead (7 benchmarks $\times$ 8 sizes)}
+\shellcmd{cd cuda-oversubscribed-benchmarks-main}\\
+\shellcmd{bash run\_overhead\_benchmark.sh}
+\end{block}
 \end{frame}
