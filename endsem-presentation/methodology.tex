@@ -111,8 +111,10 @@
 
 \draw[tr] (active_no.north) to[bend left=16] node[left, pos=0.55] {\scriptsize \texttt{stop}} (stopped.west);
 \draw[tr] (active_yes.north) to[bend right=16] node[right, pos=0.55] {\scriptsize \texttt{stop}} (stopped.east);
-\draw[tr] (paused_no.north west) to[out=150,in=150] node[left, pos=0.38] {\scriptsize \texttt{stop}} (stopped.north west);
-\draw[tr] (paused_yes.north east) to[out=30,in=30] node[right, pos=0.38] {\scriptsize \texttt{stop}} (stopped.north east);
+\draw[tr] (paused_no.west) .. controls (-100mm,10mm) and (-82mm,28mm) ..
+    node[left, pos=0.5] {\scriptsize \texttt{stop}} (stopped.north west);
+\draw[tr] (paused_yes.east) .. controls (100mm,10mm) and (82mm,28mm) ..
+    node[right, pos=0.5] {\scriptsize \texttt{stop}} (stopped.north east);
 \end{tikzpicture}
 }
 \end{center}
@@ -180,12 +182,14 @@
     Initialises live table; downgrades all GPU PTEs to \texttt{READ\_ONLY} and saves per-page PTE masks; sets \texttt{active=true}. Mode selects delta (per-epoch diff) or cumulative (session union).
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_tracking\_pause}}
     \footnotesize
     \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_pause}\\[2pt]
     Acquires query barrier (locks ISRs, drains fault buffer); sets \texttt{active=false}. Faults still serviced for forward progress but no dirty inserts emitted.
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_tracking\_resume}}
     \footnotesize
     \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_resume}\\[2pt]
@@ -200,12 +204,14 @@
     Restores exact pre-tracking permissions from \texttt{dirty\_downgraded\_pages} masks; destroys live, snapshot, and cumulative tables; flushes stats to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_tracking\_query\_cutover}}
     \footnotesize
     \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_query\_cutover}\\[2pt]
     Acquires query barrier; atomically swaps live $\to$ snapshot and installs a fresh live table; increments epoch counter; sets \texttt{snapshot\_pending=true}.
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_tracking\_query\_dump}}
     \footnotesize
     \shellcmd{cat /proc/driver/nvidia-uvm/dirty\_tracking\_query\_dump}\\[2pt]
@@ -220,12 +226,14 @@
     \texttt{enable}: resets all atomic counters and starts accumulation. \texttt{disable}: halts accumulation. Covers insert, lookup, for-each, init, destroy, and callback timing.
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_ds\_stats}}
     \footnotesize
     \shellcmd{cat /proc/driver/nvidia-uvm/dirty\_ds\_stats}\\[2pt]
     Prints per-operation call count, average latency (ns), and average \texttt{rwsem} wait time. Also reports average latency for invalidate, activate-now, and barrier-end callbacks.
 \end{block}
 \vspace{2pt}
+\pause
 \begin{block}{\texttt{dirty\_tracking\_hint}}
     \footnotesize
     \shellcmd{echo "WRITE\_SEQ|WRITE\_RAND" > /proc/driver/nvidia-uvm/dirty\_tracking\_hint}\\[2pt]
@@ -262,6 +270,7 @@
 \draw[flow] (s4)--(s5); \draw[flow] (s5)--(s6); \draw[flow] (s6)--(s7); \draw[flow] (s7)--(sg);
 \end{tikzpicture}}
 
+\pause
 \column{0.48\textwidth}
 \centering
 {\footnotesize\textbf{\texttt{dirty\_tracking\_resume}}}\\[2pt]
@@ -315,6 +324,7 @@
 \draw[flow] (p4)--(p5); \draw[flow] (p5)--(p6); \draw[flow] (p6)--(pg);
 \end{tikzpicture}}
 
+\pause
 \column{0.48\textwidth}
 \centering
 {\footnotesize\textbf{\texttt{dirty\_tracking\_stop}}}\\[2pt]
@@ -368,6 +378,7 @@
 \draw[flow] (c4)--(c5); \draw[flow] (c5)--(c6); \draw[flow] (c6)--(c7); \draw[flow] (c7)--(cg);
 \end{tikzpicture}}
 
+\pause
 \column{0.48\textwidth}
 \centering
 {\footnotesize\textbf{\texttt{dirty\_tracking\_query\_dump}}}\\[2pt]
@@ -396,7 +407,7 @@
 \end{frame}
 
 \begin{frame}{Design Choices}{Handling Prefetch (\texttt{cudaMemPrefetchAsync})}
-\begin{itemize}
+\begin{itemize}[<+->]
     \item \texttt{cudaMemPrefetchAsync} migrates pages to the GPU without a fault - it calls into the migration path directly and maps pages \texttt{READ\_WRITE\_ATOMIC}, bypassing \texttt{compute\_new\_permission} and making any subsequent write \textbf{invisible} to the tracker
     \item Fix: in \texttt{uvm\_migrate.c}, when dirty tracking is started and the destination is a GPU, the migration path forces \texttt{prot = UVM\_PROT\_READ\_ONLY} instead of \texttt{READ\_WRITE\_ATOMIC} for all prefetched pages
     \item The first GPU write to a prefetched page then generates a write fault, which is intercepted by the fault handler - the page and its timestamp are recorded, and write permissions are restored exactly as they would be for a demand-paged write

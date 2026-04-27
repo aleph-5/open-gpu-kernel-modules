@@ -1,7 +1,7 @@
 \section{Motivation}
 
 \begin{frame}{Motivation}{Why Dirty Tracking?}
-\begin{itemize}
+\begin{itemize}[<+->]
     \item The Linux kernel tracks CPU dirty pages via soft-dirty bits in page-table entries, readable through \texttt{/proc/\textit{PID}/pagemap}; \textbf{no equivalent exists for GPU-managed memory}
     \item Live process migration relies on identifying exactly which pages were written each round; without GPU dirty tracking, the entire GPU memory footprint must be copied conservatively on every iteration
     \item Fault-tolerant ML training requires knowing which model-parameter pages were updated to enable \textbf{incremental checkpointing} and avoid full restart on failure
@@ -11,7 +11,7 @@
 \end{frame}
 
 \begin{frame}{Motivation}{Limitations of Existing Approaches}
-\begin{itemize}
+\begin{itemize}[<+->]
     \item \textbf{Full memory copy:} The only correct option today without tracking; conservatively transfers the entire allocation regardless of how little was actually written
     \item \textbf{Application-level bookkeeping:} Requires instrumenting every kernel call site to record writes; not transparent, breaks with third-party or compiled-only code
     \item \textbf{Sampling-based profilers (CUPTI, nvprof):} Impose high overhead, capture aggregate statistics rather than per-page write identity, and require profiling mode which is unavailable in production

@@ -1,7 +1,7 @@
 \section{Future Work}
 
 \begin{frame}{Future Work}
-\begin{itemize}
+\begin{itemize}[<+->]
     \item \textbf{Automatic backend selection:} PTX store instructions reveal sequential vs.\ random write patterns; this can drive automatic dispatch to the correct backend, replacing the manual \texttt{dirty\_tracking\_hint}
     \item \textbf{Write-reachable VA space narrowing:} NVVM IR alias analysis can identify \texttt{cudaMallocManaged} arguments; at \texttt{start}/\texttt{resume}, only reachable VA blocks need downgrading, reducing barrier latency at large working-set sizes
     \item \textbf{Write-heat aware eviction:} Epoch-frequency counts from successive dumps can bias UVM's LRU scorer to keep write-hot pages on-device and evict clean pages, reducing re-fault frequency under memory pressure

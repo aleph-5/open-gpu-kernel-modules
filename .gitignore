@@ -37,3 +37,4 @@ performance_tests/**/tc*
 
 temp
 **/__pycache__/
+.DS_Store
