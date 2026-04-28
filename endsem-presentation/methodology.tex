@@ -469,17 +469,15 @@
 \section{Data Structures and Associated Operations}
 \begin{frame}{Data Structures and Associated Operations}{Overview}
 \begin{itemize}[<+->]
+    \item \texttt{struct uvm\_dirty\_ds} is the backend abstraction layer that any data structure 
+    used for tracking uses. Each data structure has its own implementation that can be linked
+    at compile time or by using \texttt{dirty\_tracking\_hint}
     \item \textbf{Three} instances of \texttt{uvm\_dirty\_ds} exist to hold tracking data
     \begin{itemize}
         \item \texttt{g\_dirty\_ds}
         \item \texttt{g\_dirty\_ds\_snapshot}
         \item \texttt{g\_dirty\_ds\_cumulative}
     \end{itemize}
-    \item An abstraction layer for data structure is defined by \texttt{uvm\_dirty\_ds\_ops}, 
-    which declares a common interface for insert, lookup, for-each, init, destroy, and search 
-    operations.
-    \item Each of the operation interfaces has a tracker that can track number of operations
-    and total time taken by them when stats are enabled 
 \end{itemize}
 \end{frame}
 
