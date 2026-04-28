@@ -12,3 +12,4 @@ backup_perf_logs/
 *.nsys-rep
 __pycache__
 *.strace
+.venv
