@@ -3115,10 +3115,13 @@ static NV_STATUS uvm_dirty_downgrade_all_permissions(void)
                     uvm_va_block_gpu_state_t *gpu_state = uvm_va_block_gpu_state_get(va_block, gpu_id);
                     if (!gpu_state)
                         continue;
-                    uvm_page_mask_copy(&gpu_state->dirty_downgraded_pages,
-                                       &gpu_state->pte_bits[UVM_PTE_BITS_GPU_WRITE]);
-                    uvm_page_mask_copy(&gpu_state->dirty_downgraded_atomic_pages,
-                                       &gpu_state->pte_bits[UVM_PTE_BITS_GPU_ATOMIC]);
+                    // OR (not copy) so a pause→resume accumulates permissions
+                    uvm_page_mask_or(&gpu_state->dirty_downgraded_pages,
+                                     &gpu_state->dirty_downgraded_pages,
+                                     &gpu_state->pte_bits[UVM_PTE_BITS_GPU_WRITE]);
+                    uvm_page_mask_or(&gpu_state->dirty_downgraded_atomic_pages,
+                                     &gpu_state->dirty_downgraded_atomic_pages,
+                                     &gpu_state->pte_bits[UVM_PTE_BITS_GPU_ATOMIC]);
                 }
 
                 status = uvm_va_block_revoke_prot_mask(va_block, block_ctx, &gpu_mask, region, NULL, UVM_PROT_READ_WRITE);
