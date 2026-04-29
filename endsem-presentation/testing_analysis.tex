@@ -54,48 +54,6 @@
 % \end{frame}
 
 % -- Performance: overhead table -----------------------------------------------
-\begin{frame}{Performance Testing}{Overhead by Benchmark and Working-Set Size}
-\vspace{-3mm}
-\begin{center}
-\scriptsize
-\setlength{\tabcolsep}{3.5pt}
-\begin{tabular}{%
-  >{\raggedright\arraybackslash}p{1.15cm}
-  >{\centering\arraybackslash}p{1.35cm}
-  >{\centering\arraybackslash}p{1.2cm}
-  >{\centering\arraybackslash}p{1.0cm}
-  >{\centering\arraybackslash}p{0.95cm}
-  >{\centering\arraybackslash}p{1.0cm}
-  >{\centering\arraybackslash}p{0.95cm}
-  >{\centering\arraybackslash}p{1.2cm}
-}
-\toprule
-\textbf{Size} &
-\textbf{4K stride} &
-\textbf{Seq.} &
-\textbf{GEMM} &
-\textbf{2MM} &
-\textbf{BICG} &
-\textbf{MVT} &
-\textbf{Needle} \\
-\midrule
-512\,MB  & $+57.5\%$    & $+15.7\%$   & $+26.0\%$   & $+21.5\%$ & $+26.9\%$   & $+31.7\%$   & $+113.9\%$ \\
-4\,GB    & $+372.3\%$   & $+163.4\%$  & $+19.3\%$   & $+67.2\%$ & $+131.1\%$  & $+131.7\%$  & $+871.0\%$ \\
-8\,GB    & $+659.9\%$   & $+302.9\%$  & $+15.1\%$   & $+39.6\%$ & $+171.3\%$  & $+153.1\%$  & $+959.8\%$ \\
-16\,GB   & $+1108.2\%$  & $+457.9\%$  & $+13.0\%$   & $+11.2\%$ & $+191.0\%$  & $+178.4\%$  & $+871.5\%$ \\
-32\,GB   & $+1537.6\%$  & $+630.0\%$  & $+207.6\%$  & $+9.8\%$  & $+257.9\%$  & $+265.2\%$  & $+0.6\%$   \\
-40\,GB   & $+1688.3\%$  & $+703.2\%$  & $+258.8\%$  & $+9.1\%$  & $+264.6\%$  & $+257.0\%$  & $+19.1\%$  \\
-\textit{48\,GB}$^\dagger$ & \textit{$+1730.7\%$} & \textit{$+699.4\%$} & \textit{$+213.1\%$} & \textit{---} & \textit{$+263.6\%$} & \textit{$+290.6\%$} & \textit{$+27.8\%$} \\
-\textit{64\,GB}$^\dagger$ & \textit{$+1547.1\%$} & \textit{$+648.6\%$} & \textit{$+261.6\%$} & \textit{---} & \textit{$+208.4\%$} & \textit{$+253.5\%$} & \textit{$+11.8\%$} \\
-\bottomrule
-\end{tabular}
-
-\vspace{1mm}
-{\tiny Tracking ON vs.\ OFF wall time, averaged over 5 runs.
-\emph{4K stride}/\emph{Seq.} = \texttt{int\_set\_uvm} variants.
-$^\dagger$\,Oversubscribed (exceeds GPU VRAM). 2MM oversubscribed runs not collected.}
-\end{center}
-\end{frame}
 
 % -- Benchmark workload descriptions -------------------------------------------
 \begin{frame}{Performance Testing}{Benchmark Workload Descriptions}
@@ -190,6 +148,49 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 \end{itemize}
 \end{frame}
 
+\begin{frame}{Performance Testing}{Overhead by Benchmark and Working-Set Size}
+\vspace{-3mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3.5pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.15cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.2cm}
+  >{\centering\arraybackslash}p{1.0cm}
+  >{\centering\arraybackslash}p{0.95cm}
+  >{\centering\arraybackslash}p{1.0cm}
+  >{\centering\arraybackslash}p{0.95cm}
+  >{\centering\arraybackslash}p{1.2cm}
+}
+\toprule
+\textbf{Size} &
+\textbf{4K stride} &
+\textbf{Seq.} &
+\textbf{GEMM} &
+\textbf{2MM} &
+\textbf{BICG} &
+\textbf{MVT} &
+\textbf{Needle} \\
+\midrule
+512\,MB  & $+57.5\%$    & $+15.7\%$   & $+26.0\%$   & $+21.5\%$ & $+26.9\%$   & $+31.7\%$   & $+113.9\%$ \\
+4\,GB    & $+372.3\%$   & $+163.4\%$  & $+19.3\%$   & $+67.2\%$ & $+131.1\%$  & $+131.7\%$  & $+871.0\%$ \\
+8\,GB    & $+659.9\%$   & $+302.9\%$  & $+15.1\%$   & $+39.6\%$ & $+171.3\%$  & $+153.1\%$  & $+959.8\%$ \\
+16\,GB   & $+1108.2\%$  & $+457.9\%$  & $+13.0\%$   & $+11.2\%$ & $+191.0\%$  & $+178.4\%$  & $+871.5\%$ \\
+32\,GB   & $+1537.6\%$  & $+630.0\%$  & $+207.6\%$  & $+9.8\%$  & $+257.9\%$  & $+265.2\%$  & $+0.6\%$   \\
+40\,GB   & $+1688.3\%$  & $+703.2\%$  & $+258.8\%$  & $+9.1\%$  & $+264.6\%$  & $+257.0\%$  & $+19.1\%$  \\
+\textit{48\,GB}$^\dagger$ & \textit{$+1730.7\%$} & \textit{$+699.4\%$} & \textit{$+213.1\%$} & \textit{---} & \textit{$+263.6\%$} & \textit{$+290.6\%$} & \textit{$+27.8\%$} \\
+\textit{64\,GB}$^\dagger$ & \textit{$+1547.1\%$} & \textit{$+648.6\%$} & \textit{$+261.6\%$} & \textit{---} & \textit{$+208.4\%$} & \textit{$+253.5\%$} & \textit{$+11.8\%$} \\
+\bottomrule
+\end{tabular}
+
+\vspace{1mm}
+{\tiny Tracking ON vs.\ OFF wall time, averaged over 5 runs.
+\emph{4K stride}/\emph{Seq.} = \texttt{int\_set\_uvm} variants.
+$^\dagger$\,Oversubscribed (exceeds GPU VRAM). 2MM oversubscribed runs not collected.}
+\end{center}
+\end{frame}
+
 % -- Performance: query frequency sensitivity -----------------------------------
 \begin{frame}{Performance Testing}{Query Frequency Sensitivity}
 \begin{center}
@@ -201,6 +202,58 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 \item All three lines (1, 5, or 10 \texttt{query\_dump} calls per interval) are \textbf{nearly coincident} for every benchmark
 \item \texttt{query\_dump} in delta mode \textbf{moves a pointer}; it does not re-scan the backing structure proportional to its size, so more epochs add negligible cost
 \item Slight spread on Needle reflects \textbf{sleep-interval variability}, not an epoch-count effect
+\end{itemize}
+\end{frame}
+
+
+\begin{frame}{Performance Testing}{Theoretical Bounds for Data Structures}
+\begin{center}
+\renewcommand{\arraystretch}{1.15}
+\scriptsize
+\begin{tabular}{l l l l p{52mm}}
+\toprule
+\textbf{Backend} & \textbf{Insert} & \textbf{Lookup} & \textbf{Iterate} & \textbf{Notes} \\
+\midrule
+bitmap           & $O(1)$            & $O(1)$       & $O(P/w + k)$  & flat \texttt{vzalloc}'d $2^{38}$-bit map; \textbf{no timestamps}; 32\,MB fixed \\
+xarray           & $O(1)$ amortised  & $O(1)$       & $O(n)$        & atomic \texttt{xa\_cmpxchg}; timestamps stored \\
+sorted vector    & $O(n)$            & $O(\log n)$  & $O(\log n+k)$ & binary-search insert; no internal lock \\
+unsorted vector  & $O(n)$            & $O(n)$       & $O(n)$        & append-only; IRQ-safe spinlock \\
+linked list      & $O(n)$            & $O(n)$       & $O(n)$        & sentinel head; no extra lock \\
+nested bitmap    & $O(1)$            & $O(1)$       & $O(B+k)$      & 2-level xarray+bitmap; timestamps stored \\
+chunked vector   & $O(1)$ amortised  & $O(\log n + n_c)$ & $O(n)$    & background \texttt{kthread} sort \\
+\bottomrule
+\end{tabular}
+\end{center}
+\vspace{1mm}
+{\scriptsize $n=$ dirty pages, $k=$ pages in query range,
+$P=2^{38}$, $w=$ word size, $B=$ allocated VA blocks,
+$n_c=$ entries in active chunk.}
+
+\vspace{1.5mm}
+{\scriptsize
+\begin{itemize}
+  \item Backends are swappable via the \texttt{struct uvm\_dirty\_ds} abstraction layer. Each backend exposes the same ops vtable (\texttt{init}, \texttt{insert}, \texttt{lookup},
+\texttt{for\_each\_in\_range}, \texttt{destroy})
+  \item Switching is a one-line change to the static initialiser of \texttt{g\_dirty\_ds}, or done at runtime via \texttt{dirty\_tracking\_hint}.
+  \item Inline timing wrappers in \texttt{uvm\_dirty\_ds.h} accumulate per-op latency counters,
+gated by \texttt{unlikely(stats.enabled)} so the disabled path adds no measurable overhead.
+
+\end{itemize}
+}
+\end{frame}
+
+% -- Cross-backend: 4K-stride graph --------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - 4K-Stride (cont.)}
+\vspace{-3mm}
+  \begin{center}
+\includegraphics[width=0.75\textwidth]{backend_stride.pdf}
+\end{center}
+\vspace{-4mm}
+\begin{itemize}[<+->]
+\tiny
+\item \textbf{XArray and Nested BM} nearly lockstep throughout (e.g.\ 272\% vs.\ 263\% at 4\,GB); \textbf{Vector} 30--70\% higher due to sorted-insert binary search
+\item \textbf{Vec.-U and Chunked}: Insert latencies of 65{,}010\,ns and 196{,}990\,ns impose enormous cost per write fault
+\item In the oversubscribed regime XArray and Nested BM \textbf{converge further} as eviction-subsystem cost dominates tracking cost
 \end{itemize}
 \end{frame}
 
@@ -247,18 +300,18 @@ $^\dagger$~Oversubscribed.}
 \end{center}
 \end{frame}
 
-% -- Cross-backend: 4K-stride graph --------------------------------------------
-\begin{frame}{Performance Testing}{Cross-Backend Overhead - 4K-Stride (cont.)}
+% -- Cross-backend: GEMM graph -------------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - GEMM (cont.)}
 \vspace{-3mm}
   \begin{center}
-\includegraphics[width=0.75\textwidth]{backend_stride.pdf}
+\includegraphics[width=0.75\textwidth]{backend_gemm.pdf}
 \end{center}
 \vspace{-4mm}
 \begin{itemize}[<+->]
 \tiny
-\item \textbf{XArray and Nested BM} nearly lockstep throughout (e.g.\ 272\% vs.\ 263\% at 4\,GB); \textbf{Vector} 30--70\% higher due to sorted-insert binary search
-\item \textbf{Vec.-U and Chunked}: Insert latencies of 65{,}010\,ns and 196{,}990\,ns impose enormous cost per write fault
-\item In the oversubscribed regime XArray and Nested BM \textbf{converge further} as eviction-subsystem cost dominates tracking cost
+\item At $\leq$16\,GB all scalable backends cluster in the \textbf{13--30\% band}: long compute time amortises tracking cost, so insert latency is irrelevant
+\item Regime shift at $\geq$32\,GB spikes \textbf{all backends equally} to 207--267\% --- benchmark-internal, not a tracking effect
+\item \textbf{Linked List} $>$1{,}000\% at 4\,GB consistent with $O(n)$ insert; \textbf{Chunked}'s poor insert performance invisible at low fault counts but explodes above 4\,GB
 \end{itemize}
 \end{frame}
 
@@ -304,21 +357,6 @@ $^\dagger$~Oversubscribed.}
 Vec.-U shows spurious $-93.3\%$ at 512\,MB (measurement noise from very short baseline).
 $^\dagger$~Oversubscribed.}
 \end{center}
-\end{frame}
-
-% -- Cross-backend: GEMM graph -------------------------------------------------
-\begin{frame}{Performance Testing}{Cross-Backend Overhead - GEMM (cont.)}
-\vspace{-3mm}
-  \begin{center}
-\includegraphics[width=0.75\textwidth]{backend_gemm.pdf}
-\end{center}
-\vspace{-4mm}
-\begin{itemize}[<+->]
-\tiny
-\item At $\leq$16\,GB all scalable backends cluster in the \textbf{13--30\% band}: long compute time amortises tracking cost, so insert latency is irrelevant
-\item Regime shift at $\geq$32\,GB spikes \textbf{all backends equally} to 207--267\% --- benchmark-internal, not a tracking effect
-\item \textbf{Linked List} $>$1{,}000\% at 4\,GB consistent with $O(n)$ insert; \textbf{Chunked}'s poor insert performance invisible at low fault counts but explodes above 4\,GB
-\end{itemize}
 \end{frame}
 
 % -- Per-operation latency ------------------------------------------------------

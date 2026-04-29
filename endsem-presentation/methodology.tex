@@ -469,20 +469,20 @@ backend locks (\texttt{xa\_cmpxchg}, unsorted-vector IRQ spinlock)
 are acquired inside \texttt{ds\_rwsem}.}
 \end{frame}
 
-\section{Data Structures and Associated Operations}
-\begin{frame}{Data Structures and Associated Operations}{Overview}
-\begin{itemize}[<+->]
-    \item \texttt{struct uvm\_dirty\_ds} is the backend abstraction layer that any data structure 
-    used for tracking uses. Each data structure has its own implementation that can be linked
-    at compile time or by using \texttt{dirty\_tracking\_hint}
-    \item \textbf{Three} instances of \texttt{uvm\_dirty\_ds} exist to hold tracking data
-    \begin{itemize}
-        \item \texttt{g\_dirty\_ds}
-        \item \texttt{g\_dirty\_ds\_snapshot}
-        \item \texttt{g\_dirty\_ds\_cumulative}
-    \end{itemize}
-\end{itemize}
-\end{frame}
+% \section{Data Structures and Associated Operations}
+% \begin{frame}{Data Structures and Associated Operations}{Overview}
+% \begin{itemize}[<+->]
+%     \item \texttt{struct uvm\_dirty\_ds} is the backend abstraction layer that any data structure 
+%     used for tracking uses. Each data structure has its own implementation that can be linked
+%     at compile time or by using \texttt{dirty\_tracking\_hint}
+%     \item \textbf{Three} instances of \texttt{uvm\_dirty\_ds} exist to hold tracking data
+%     \begin{itemize}
+%         \item \texttt{g\_dirty\_ds}
+%         \item \texttt{g\_dirty\_ds\_snapshot}
+%         \item \texttt{g\_dirty\_ds\_cumulative}
+%     \end{itemize}
+% \end{itemize}
+% \end{frame}
 
 % \begin{frame}{Data Structures and Associated Operations}{Container Details}
 % \begin{itemize}[<+->]
@@ -502,27 +502,3 @@ are acquired inside \texttt{ds\_rwsem}.}
 %     the disabled path has no measurable overhead
 % \end{itemize}
 % \end{frame}
-
-\begin{frame}{Data Structures and Associated Operations}{Backend Implementations}
-\begin{center}
-\renewcommand{\arraystretch}{1.15}
-\scriptsize
-\begin{tabular}{l l l l p{52mm}}
-\toprule
-\textbf{Backend} & \textbf{Insert} & \textbf{Lookup} & \textbf{Iterate} & \textbf{Notes} \\
-\midrule
-bitmap           & $O(1)$            & $O(1)$       & $O(P/w + k)$  & flat \texttt{vzalloc}'d $2^{38}$-bit map; \textbf{no timestamps}; 32\,MB fixed \\
-xarray           & $O(1)$ amortised  & $O(1)$       & $O(n)$        & atomic \texttt{xa\_cmpxchg}; timestamps stored \\
-sorted vector    & $O(n)$            & $O(\log n)$  & $O(\log n+k)$ & binary-search insert; no internal lock \\
-unsorted vector  & $O(n)$            & $O(n)$       & $O(n)$        & append-only; IRQ-safe spinlock \\
-linked list      & $O(n)$            & $O(n)$       & $O(n)$        & sentinel head; no extra lock \\
-nested bitmap    & $O(1)$            & $O(1)$       & $O(B+k)$      & 2-level xarray+bitmap; timestamps stored \\
-chunked vector   & $O(1)$ amortised  & $O(\log n + n_c)$ & $O(n)$    & background \texttt{kthread} sort \\
-\bottomrule
-\end{tabular}
-\end{center}
-\vspace{1mm}
-{\scriptsize $n=$ dirty pages, $k=$ pages in query range,
-$P=2^{38}$, $w=$ word size, $B=$ allocated VA blocks,
-$n_c=$ entries in active chunk.}
-\end{frame}
