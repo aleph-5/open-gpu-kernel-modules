@@ -1,7 +1,7 @@
 \section{Testing and Analysis}
 
 % -- Correctness: summary table ------------------------------------------------
-\begin{frame}{Correctness Testing}{Suite Summary --- 74/74 Passed}
+\begin{frame}{Correctness Testing}{Suite Summary - 74/74 Passed}
 \vspace{-2mm}
 \begin{center}
 \scriptsize
@@ -145,4 +145,221 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 \shellcmd{cd cuda-oversubscribed-benchmarks-main}\\
 \shellcmd{bash run\_overhead\_benchmark.sh}
 \end{block}
+\end{frame}
+
+% -- Performance: write-intensive graphs ----------------------------------------
+\begin{frame}{Performance Testing}{Write-Intensive Benchmarks (\texttt{int\_set\_uvm})}
+\begin{center}
+\includegraphics[width=0.75\textwidth]{overhead_write.pdf}
+\end{center}
+\vspace{-5mm}
+\begin{itemize}[<+->]
+\tiny
+\item Overhead scales with \textbf{write-fault density}: 4K-stride hits every page fresh (max fault rate) --- $+57.5\%$ at 512\,MB growing to $+1730.7\%$ at 48\,GB
+\item Sequential access coalesces memory traffic $\to$ fewer faults per byte $\to$ \textbf{2--8$\times$ lower} overhead at the same working-set size
+\item Oversubscribed regime ($\geq$48\,GB): first-write-wins caps insertions to \textbf{one per page per epoch} regardless of eviction-driven re-faulting
+\end{itemize}
+\end{frame}
+
+% -- Performance: polybench graphs -----------------------------------------------
+\begin{frame}{Performance Testing}{PolyBench Kernels}
+\begin{center}
+\includegraphics[width=0.7\textwidth]{overhead_polybench.pdf}
+\end{center}
+\vspace{-3mm}
+\begin{itemize}[<+->]
+\tiny
+\item \textbf{GEMM/2MM}: high arithmetic intensity dominates runtime $\to$ \textbf{13--26\%} overhead while working set fits in VRAM; 2MM lowest of all (9\%) at large sizes due to chained computation
+\item \textbf{Regime shift at $\geq$32\,GB}: GEMM baseline drops sharply (205\,s $\to$ 19\,s), making fixed tracking cost appear disproportionately large (207--261\%) --- benchmark-internal, not a tracking effect
+\item \textbf{BICG/MVT}: read-heavy but non-trivial overhead from initial page-population faults and small write footprints; amplified further in the oversubscribed regime
+\end{itemize}
+\end{frame}
+
+% -- Performance: needle graph --------------------------------------------------
+\begin{frame}{Performance Testing}{Rodinia Needle - Two-Regime Behavior}
+
+\begin{center}
+\includegraphics[width=0.8\textwidth]{overhead_needle.pdf}
+\end{center}
+\vspace{-1mm}
+\begin{itemize}[<+->]
+\tiny
+\item \textbf{4--16\,GB}: dense DP score-matrix fills every cell $\to$ high first-write fault rate per kernel invocation $\to$ \textbf{871--960\%} overhead
+\item \textbf{$\geq$32\,GB}: \texttt{-mb} parameter cuts iteration count drastically, write footprint collapses, overhead drops to \textbf{near zero} ($+0.6$--$+27.8\%$)
+\item Confirms \textbf{no fixed overhead floor}: the tracking pipeline adds cost only proportional to actual write-fault work
+\end{itemize}
+\end{frame}
+
+% -- Performance: query frequency sensitivity -----------------------------------
+\begin{frame}{Performance Testing}{Query Frequency Sensitivity}
+\begin{center}
+\includegraphics[width=0.82\textwidth]{overhead_query_freq.pdf}
+\end{center}
+\vspace{-1mm}
+\begin{itemize}[<+->]
+\tiny
+\item All three lines (1, 5, or 10 \texttt{query\_dump} calls per interval) are \textbf{nearly coincident} for every benchmark
+\item \texttt{query\_dump} in delta mode \textbf{moves a pointer}; it does not re-scan the backing structure proportional to its size, so more epochs add negligible cost
+\item Slight spread on Needle reflects \textbf{sleep-interval variability}, not an epoch-count effect
+\end{itemize}
+\end{frame}
+
+% -- Cross-backend: 4K-stride table --------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - 4K-Stride}
+\vspace{-2mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+}
+\toprule
+\textbf{Size} &
+\rotatebox{90}{\textbf{XArray}} &
+\rotatebox{90}{\textbf{Vector}} &
+\rotatebox{90}{\textbf{Vec.-U}} &
+\rotatebox{90}{\textbf{Chunked}} &
+\rotatebox{90}{\textbf{Nested BM}} &
+\rotatebox{90}{\textbf{Linked List}} \\
+\midrule
+512\,MB              & $+36.6\%$   & $+57.5\%$   & $+900.8\%$   & $+247.9\%$   & $+48.6\%$   & $917.4\%$ \\
+4\,GB                & $+272.0\%$  & $+372.3\%$  & $+27730.1\%$ & $+16951.0\%$ & $+263.6\%$  & - \\
+8\,GB                & $+462.1\%$  & $+659.9\%$  & OOM          & OOM          & $+456.8\%$  & - \\
+16\,GB               & $+680.8\%$  & $+1108.2\%$ & OOM          & OOM          & $+689.3\%$  & - \\
+32\,GB               & $+981.1\%$  & $+1537.6\%$ & OOM          & OOM          & $+914.0\%$  & - \\
+40\,GB               & $+1046.0\%$ & $+1688.3\%$ & OOM          & OOM          & $+1001.2\%$ & - \\
+\rowcolor[gray]{0.92}
+48\,GB$^\dagger$     & $+1038.7\%$ & $+1730.7\%$ & OOM          & OOM          & $+922.9\%$  & - \\
+\rowcolor[gray]{0.92}
+64\,GB$^\dagger$     & $+942.0\%$  & $+1547.1\%$ & OOM          & OOM          & $+921.0\%$  & - \\
+\bottomrule
+\end{tabular}
+
+\vspace{1mm}
+{\tiny Vec.-U\,=\,Vector Unsorted; Nested BM\,=\,Nested Bitmap. 5-run average, tracking ON vs.\ OFF.
+$^\dagger$~Oversubscribed.}
+\end{center}
+\end{frame}
+
+% -- Cross-backend: 4K-stride graph --------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - 4K-Stride (cont.)}
+\vspace{-3mm}
+  \begin{center}
+\includegraphics[width=0.75\textwidth]{backend_stride.pdf}
+\end{center}
+\vspace{-4mm}
+\begin{itemize}[<+->]
+\tiny
+\item \textbf{XArray and Nested BM} nearly lockstep throughout (e.g.\ 272\% vs.\ 263\% at 4\,GB); \textbf{Vector} 30--70\% higher due to sorted-insert binary search
+\item \textbf{Vec.-U and Chunked}: Insert latencies of 65{,}010\,ns and 196{,}990\,ns impose enormous cost per write fault
+\item In the oversubscribed regime XArray and Nested BM \textbf{converge further} as eviction-subsystem cost dominates tracking cost
+\end{itemize}
+\end{frame}
+
+% -- Cross-backend: GEMM table -------------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - GEMM}
+\vspace{-2mm}
+\begin{center}
+\scriptsize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+  >{\centering\arraybackslash}p{1.35cm}
+}
+\toprule
+\textbf{Size} &
+\rotatebox{90}{\textbf{XArray}} &
+\rotatebox{90}{\textbf{Vector}} &
+\rotatebox{90}{\textbf{Vec.-U}} &
+\rotatebox{90}{\textbf{Chunked}} &
+\rotatebox{90}{\textbf{Nested BM}} &
+\rotatebox{90}{\textbf{Linked List}} \\
+\midrule
+512\,MB              & $+26.3\%$  & $+26.0\%$  & $-93.3\%$  & $+30.3\%$  & $+23.9\%$ & $+161.2\%$ \\
+4\,GB                & $+24.7\%$  & $+19.3\%$  & $+380.8\%$ & $+103.1\%$ & $+25.4\%$ & $+1147.3\%$ \\
+8\,GB                & $+17.1\%$  & $+15.1\%$  & $+551.3\%$ & $+137.3\%$ & $+20.9\%$ & - \\
+16\,GB               & $+13.6\%$  & $+13.0\%$  & OOM        & $+287.3\%$ & $+13.4\%$ & - \\
+32\,GB               & $+266.8\%$ & $+207.6\%$ & OOM        & OOM        & OOM       & - \\
+40\,GB               & $+256.1\%$ & $+258.8\%$ & OOM        & OOM        & OOM       & - \\
+\rowcolor[gray]{0.92}
+48\,GB$^\dagger$     & $+259.3\%$ & $+213.1\%$ & OOM        & OOM        & OOM       & - \\
+\rowcolor[gray]{0.92}
+64\,GB$^\dagger$     & $+266.2\%$ & $+261.6\%$ & OOM        & OOM        & OOM       & - \\
+\bottomrule
+\end{tabular}
+
+\vspace{1mm}
+{\tiny Vec.-U\,=\,Vector Unsorted; Nested BM\,=\,Nested Bitmap. 5-run average.
+Vec.-U shows spurious $-93.3\%$ at 512\,MB (measurement noise from very short baseline).
+$^\dagger$~Oversubscribed.}
+\end{center}
+\end{frame}
+
+% -- Cross-backend: GEMM graph -------------------------------------------------
+\begin{frame}{Performance Testing}{Cross-Backend Overhead - GEMM (cont.)}
+\vspace{-3mm}
+  \begin{center}
+\includegraphics[width=0.75\textwidth]{backend_gemm.pdf}
+\end{center}
+\vspace{-4mm}
+\begin{itemize}[<+->]
+\tiny
+\item At $\leq$16\,GB all scalable backends cluster in the \textbf{13--30\% band}: long compute time amortises tracking cost, so insert latency is irrelevant
+\item Regime shift at $\geq$32\,GB spikes \textbf{all backends equally} to 207--267\% --- benchmark-internal, not a tracking effect
+\item \textbf{Linked List} $>$1{,}000\% at 4\,GB consistent with $O(n)$ insert; \textbf{Chunked}'s poor insert performance invisible at low fault counts but explodes above 4\,GB
+\end{itemize}
+\end{frame}
+
+% -- Per-operation latency ------------------------------------------------------
+\begin{frame}{Performance Testing}{Per-Operation Latency Across Backends}
+\begin{columns}[T]
+\column{0.35\textwidth}
+\vspace{-1mm}
+\begin{center}
+\scriptsize
+\renewcommand{\arraystretch}{1.1}
+\setlength{\tabcolsep}{2.5pt}
+\vspace{7mm}
+\begin{tabular}{%
+  >{\raggedright\arraybackslash}p{1.7cm}
+  >{\centering\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.1cm}
+  >{\centering\arraybackslash}p{1.05cm}
+}
+\toprule
+\textbf{Backend} & \textbf{Insert} & \textbf{Lock-} & \textbf{For-} \\
+                 & \textbf{avg ns} & \textbf{wait ns} & \textbf{each s} \\
+\midrule
+XArray        & 145     & 33 & 0.189 \\
+Vector        & 867     & 35 & 0.052 \\
+Vec. Unsor.$^*$ & 65{,}010 & 44 & 8.542 \\
+Chunked       & 196{,}990 & 43 & 204.234 \\
+Nested BM     & 69      & 33 & 0.047 \\
+Linked List$^*$ & 149{,}581 & 42 & 20.047 \\
+\bottomrule
+\end{tabular}
+\end{center}
+{\tiny $^*$~Measured at 512\,MB (OOM at 4\,GB).}
+\column{0.65\textwidth}
+\includegraphics[width=\textwidth]{backend_ops.pdf}
+{\tiny Insert (left) and for-each (right) latency per backend, log scale.}
+\end{columns}
+\vspace{1mm}
+\begin{itemize}[<+->]
+\scriptsize
+\item \textbf{Nested BM}: cheapest insert (69\,ns, atomic bit-set) and fastest for-each (0.047\,s, 64 pages per word scan)
+\item \textbf{XArray}: 145\,ns insert but 4$\times$ slower for-each (0.189\,s) due to pointer chasing across sparse tree nodes
+\item \textbf{Chunked}: $O(1)$ insert but \textbf{204\,s} for-each --- 4{,}000$\times$ slower than Nested BM; explains catastrophic end-to-end overhead
+\end{itemize}
 \end{frame}
