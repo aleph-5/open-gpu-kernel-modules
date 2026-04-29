@@ -33,25 +33,25 @@
 \end{center}
 \end{frame}
 
-% -- Correctness: running instructions (cascading) -----------------------------
-\begin{frame}[fragile,shrink=25]{Correctness Testing}{Running the Tests}
-\begin{block}{Run all 16 suites (74 tests, $\approx$10 min)}
-\shellcmd{sudo python3 correctness\_tests/run\_all.py}
-\end{block}
-\pause
-\begin{block}{Run a single suite}
-\shellcmd{cd correctness\_tests/ordering \&\& sudo python3 run\_tests.py}
-\end{block}
-\pause
-\begin{block}{Run one test inside a suite}
-\shellcmd{sudo python3 run\_tests.py tc01}
-\end{block}
-\pause
-\begin{block}{Useful flags}
-\shellcmd{sudo python3 run\_tests.py --no-build\quad\#\ skip recompile}\\
-\shellcmd{sudo python3 run\_tests.py --verbose\quad\#\ show stdout of passing tests}
-\end{block}
-\end{frame}
+% % -- Correctness: running instructions (cascading) -----------------------------
+% \begin{frame}[fragile,shrink=25]{Correctness Testing}{Running the Tests}
+% \begin{block}{Run all 16 suites (74 tests, $\approx$10 min)}
+% \shellcmd{sudo python3 correctness\_tests/run\_all.py}
+% \end{block}
+% \pause
+% \begin{block}{Run a single suite}
+% \shellcmd{cd correctness\_tests/ordering \&\& sudo python3 run\_tests.py}
+% \end{block}
+% \pause
+% \begin{block}{Run one test inside a suite}
+% \shellcmd{sudo python3 run\_tests.py tc01}
+% \end{block}
+% \pause
+% \begin{block}{Useful flags}
+% \shellcmd{sudo python3 run\_tests.py --no-build\quad\#\ skip recompile}\\
+% \shellcmd{sudo python3 run\_tests.py --verbose\quad\#\ show stdout of passing tests}
+% \end{block}
+% \end{frame}
 
 % -- Performance: overhead table -----------------------------------------------
 \begin{frame}{Performance Testing}{Overhead by Benchmark and Working-Set Size}
@@ -123,29 +123,29 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 \end{center}
 \end{frame}
 
-% -- Performance: running instructions (cascading) -----------------------------
-\begin{frame}[fragile,shrink=25]{Performance Testing}{Running the Benchmarks}
-\begin{block}{General overhead (sequential \& random write patterns)}
-\shellcmd{cd performance\_tests/general\_performance \&\& make}\\
-\shellcmd{sudo ./tc01\_performance\_overhead > results\_seq.csv}\\
-\shellcmd{sudo ./tc02\_random\_write\_overhead > results\_rand.csv}
-\end{block}
-\pause
-\begin{block}{Per-operation microbenchmarks (insert / for-each latencies)}
-\shellcmd{cd performance\_tests/operation\_microbenchmarks}\\
-\shellcmd{sudo python3 run\_tests.py}
-\end{block}
-\pause
-\begin{block}{Stress test}
-\shellcmd{cd performance\_tests/stress\_tests \&\& make}\\
-\shellcmd{sudo ./tc01\_stress\_testing}
-\end{block}
-\pause
-\begin{block}{Cross-benchmark overhead (7 benchmarks $\times$ 8 sizes)}
-\shellcmd{cd cuda-oversubscribed-benchmarks-main}\\
-\shellcmd{bash run\_overhead\_benchmark.sh}
-\end{block}
-\end{frame}
+% % -- Performance: running instructions (cascading) -----------------------------
+% \begin{frame}[fragile,shrink=25]{Performance Testing}{Running the Benchmarks}
+% \begin{block}{General overhead (sequential \& random write patterns)}
+% \shellcmd{cd performance\_tests/general\_performance \&\& make}\\
+% \shellcmd{sudo ./tc01\_performance\_overhead > results\_seq.csv}\\
+% \shellcmd{sudo ./tc02\_random\_write\_overhead > results\_rand.csv}
+% \end{block}
+% \pause
+% \begin{block}{Per-operation microbenchmarks (insert / for-each latencies)}
+% \shellcmd{cd performance\_tests/operation\_microbenchmarks}\\
+% \shellcmd{sudo python3 run\_tests.py}
+% \end{block}
+% \pause
+% \begin{block}{Stress test}
+% \shellcmd{cd performance\_tests/stress\_tests \&\& make}\\
+% \shellcmd{sudo ./tc01\_stress\_testing}
+% \end{block}
+% \pause
+% \begin{block}{Cross-benchmark overhead (7 benchmarks $\times$ 8 sizes)}
+% \shellcmd{cd cuda-oversubscribed-benchmarks-main}\\
+% \shellcmd{bash run\_overhead\_benchmark.sh}
+% \end{block}
+% \end{frame}
 
 % -- Performance: write-intensive graphs ----------------------------------------
 \begin{frame}{Performance Testing}{Write-Intensive Benchmarks (\texttt{int\_set\_uvm})}

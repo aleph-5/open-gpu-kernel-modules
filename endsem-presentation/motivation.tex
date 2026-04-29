@@ -1,14 +1,14 @@
 \section{Motivation}
 
-\begin{frame}{Motivation}{Why Dirty Tracking?}
-\begin{itemize}[<+->]
-    \item The Linux kernel tracks CPU dirty pages via soft-dirty bits in page-table entries, readable through \texttt{/proc/\textit{PID}/pagemap}; \textbf{no equivalent exists for GPU-managed memory}
-    \item Live process migration relies on identifying exactly which pages were written each round; without GPU dirty tracking, the entire GPU memory footprint must be copied conservatively on every iteration
-    \item Fault-tolerant ML training requires knowing which model-parameter pages were updated to enable \textbf{incremental checkpointing} and avoid full restart on failure
-    \item In heterogeneous CPU-GPU workloads with alternating compute phases, only GPU-written pages need to be synchronised back to the host; tracking eliminates unnecessary transfers
-    \item UVM already intercepts every GPU page fault for demand-paging, making the fault path a \textbf{natural and zero-hardware-cost} instrumentation point
-\end{itemize}
-\end{frame}
+% \begin{frame}{Motivation}{Why Dirty Tracking?}
+% \begin{itemize}[<+->]
+%     \item The Linux kernel tracks CPU dirty pages via soft-dirty bits in page-table entries, readable through \texttt{/proc/\textit{PID}/pagemap}; \textbf{no equivalent exists for GPU-managed memory}
+%     \item Live process migration relies on identifying exactly which pages were written each round; without GPU dirty tracking, the entire GPU memory footprint must be copied conservatively on every iteration
+%     \item Fault-tolerant ML training requires knowing which model-parameter pages were updated to enable \textbf{incremental checkpointing} and avoid full restart on failure
+%     \item In heterogeneous CPU-GPU workloads with alternating compute phases, only GPU-written pages need to be synchronised back to the host; tracking eliminates unnecessary transfers
+%     \item UVM already intercepts every GPU page fault for demand-paging, making the fault path a \textbf{natural and zero-hardware-cost} instrumentation point
+% \end{itemize}
+% \end{frame}
 
 \begin{frame}{Motivation}{Limitations of Existing Approaches}
 \begin{itemize}[<+->]
@@ -19,3 +19,5 @@
     \item \textbf{No epoch or timestamp support:} None of the above provide a mechanism to atomically snapshot the dirty set at an epoch boundary or order writes in time, both of which are required for correct iterative migration
 \end{itemize}
 \end{frame}
+
+

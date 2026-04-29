@@ -175,70 +175,26 @@
 \end{center}
 \end{frame}
 
-\begin{frame}{Implementation}{Procfs Interface: Lifecycle Controls}
-\begin{block}{\texttt{dirty\_tracking\_start}}
-    \footnotesize
-    \shellcmd{echo "<PID> delta|cumulative" > /proc/driver/nvidia-uvm/dirty\_tracking\_start}\\[2pt]
-    Initialises live table; downgrades all GPU PTEs to \texttt{READ\_ONLY} and saves per-page PTE masks; sets \texttt{active=true}. Mode selects delta (per-epoch diff) or cumulative (session union).
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_tracking\_pause}}
-    \footnotesize
-    \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_pause}\\[2pt]
-    Acquires query barrier (locks ISRs, drains fault buffer); sets \texttt{active=false}. Faults still serviced for forward progress but no dirty inserts emitted.
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_tracking\_resume}}
-    \footnotesize
-    \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_resume}\\[2pt]
-    Re-runs downgrade sequence (revoke PTEs, set \texttt{active=true}) without reinitialising tables. Entries accumulated before pause are preserved.
-\end{block}
-\end{frame}
-
-\begin{frame}{Implementation}{Procfs Interface: Query Controls}
-\begin{block}{\texttt{dirty\_tracking\_stop}}
-    \footnotesize
-    \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_stop}\\[2pt]
-    Restores exact pre-tracking permissions from \texttt{dirty\_downgraded\_pages} masks; destroys live, snapshot, and cumulative tables; flushes stats to \texttt{/tmp/uvm\_dirty\_ds\_stats.txt}.
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_tracking\_query\_cutover}}
-    \footnotesize
-    \shellcmd{echo "<PID>" > /proc/driver/nvidia-uvm/dirty\_tracking\_query\_cutover}\\[2pt]
-    Acquires query barrier; atomically swaps live $\to$ snapshot and installs a fresh live table; increments epoch counter; sets \texttt{snapshot\_pending=true}.
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_tracking\_query\_dump}}
-    \footnotesize
-    \shellcmd{cat /proc/driver/nvidia-uvm/dirty\_tracking\_query\_dump}\\[2pt]
-    Emits frozen snapshot as \texttt{0x<addr> <timestamp\_ns>} lines. Delta: snapshot only. Cumulative: merge into session-union (first-write-wins) then emit union. Overflow-safe: snapshot retained and replayed on \texttt{seq\_file} overflow.
-\end{block}
-\end{frame}
-
-\begin{frame}{Implementation}{Procfs Interface: Instrumentation and Backend}
-\begin{block}{\texttt{dirty\_ds\_stats\_toggle}}
-    \footnotesize
-    \shellcmd{echo "enable|disable" > /proc/driver/nvidia-uvm/dirty\_ds\_stats\_toggle}\\[2pt]
-    \texttt{enable}: resets all atomic counters and starts accumulation. \texttt{disable}: halts accumulation. Covers insert, lookup, for-each, init, destroy, and callback timing.
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_ds\_stats}}
-    \footnotesize
-    \shellcmd{cat /proc/driver/nvidia-uvm/dirty\_ds\_stats}\\[2pt]
-    Prints per-operation call count, average latency (ns), and average \texttt{rwsem} wait time. Also reports average latency for invalidate, activate-now, and barrier-end callbacks.
-\end{block}
-\vspace{2pt}
-\pause
-\begin{block}{\texttt{dirty\_tracking\_hint}}
-    \footnotesize
-    \shellcmd{echo "WRITE\_SEQ|WRITE\_RAND" > /proc/driver/nvidia-uvm/dirty\_tracking\_hint}\\[2pt]
-    Switches backend before a session. \texttt{WRITE\_SEQ} $\to$ sorted vector (sequential workloads); \texttt{WRITE\_RAND} $\to$ nested bitmap (random workloads). Rejected if any table is initialised.
-\end{block}
+\begin{frame}{Implementation}{Procfs Interface}
+\begin{center}
+\renewcommand{\arraystretch}{1.25}
+\footnotesize
+\begin{tabular}{l p{95mm}}
+\toprule
+\textbf{Interface} & \textbf{Description} \\
+\midrule
+\texttt{dirty\_tracking\_start}          & Begin session; downgrade GPU PTEs to \texttt{READ\_ONLY}; select delta or cumulative mode \\
+\texttt{dirty\_tracking\_pause}          & Drain fault buffer and suspend dirty recording (\texttt{active=false}) \\
+\texttt{dirty\_tracking\_resume}         & Re-arm PTEs to \texttt{READ\_ONLY} and resume recording; preserves existing entries \\
+\texttt{dirty\_tracking\_stop}           & Restore pre-tracking permissions; destroy all tables; flush stats \\
+\texttt{dirty\_tracking\_query\_cutover} & Atomically swap live $\to$ snapshot; install fresh live table; advance epoch \\
+\texttt{dirty\_tracking\_query\_dump}    & Emit frozen snapshot as \texttt{0x<addr> <ts\_ns>} lines; merge into cumulative if in cumulative mode \\
+\texttt{dirty\_ds\_stats\_toggle}        & Enable/disable per-operation latency and call-count instrumentation \\
+\texttt{dirty\_ds\_stats}               & Read accumulated stats (latency, call counts, rwsem wait times) \\
+\texttt{dirty\_tracking\_hint}           & Switch backend before session (\texttt{WRITE\_SEQ}: sorted vector; \texttt{WRITE\_RAND}: nested bitmap) \\
+\bottomrule
+\end{tabular}
+\end{center}
 \end{frame}
 
 \section{Design Choices}
@@ -415,55 +371,102 @@
 \end{itemize}
 \end{frame}
 
-\begin{frame}{Design Choices}{Query Modes (Delta)}
-\begin{itemize}[<+->]
-    \item \textbf{Two} query modes are supported which are selected when \emph{starting} 
-    tracking and remain fixed during the tracking session
-    \item \textbf{Delta Mode} only dumps the pages written to between two 
-    \texttt{query\_cutover}
-    \item \texttt{query\_cutover} changes the live table to the snapshot and a fresh live
-    table is created
-    \item All write faults before the barrier are captured in the snapshot
-    \item \texttt{query\_dump} reads the snapshot and destroys then destroys it
-    \item Suited for iterative \textbf{pre-copy migration}, as the set of remaining dirty pages
-    shrinks over time. Delta mode also has low memory overhead during long sessions with
-    many cutovers
-\end{itemize}
+% \begin{frame}{Design Choices}{Query Modes (Delta)}
+% \begin{itemize}[<+->]
+%     \item \textbf{Two} query modes are supported which are selected when \emph{starting}
+%     tracking and remain fixed during the tracking session
+%     \item \textbf{Delta Mode} only dumps the pages written to between two
+%     \texttt{query\_cutover}
+%     \item \texttt{query\_cutover} changes the live table to the snapshot and a fresh live
+%     table is created
+%     \item All write faults before the barrier are captured in the snapshot
+%     \item \texttt{query\_dump} reads the snapshot and destroys then destroys it
+%     \item Suited for iterative \textbf{pre-copy migration}, as the set of remaining dirty pages
+%     shrinks over time. Delta mode also has low memory overhead during long sessions with
+%     many cutovers
+% \end{itemize}
+% \end{frame}
+
+% \begin{frame}{Design Choices}{Query Modes (Cumulative)}
+% \begin{itemize}[<+->]
+%     \item \textbf{Cumulative Mode} dumps the pages written to since the start of tracking
+%     \item \texttt{query\_dump} merges the frozen snapshot into
+%     \texttt{g\_dirty\_ds\_cumulative} using \textit{first-write-wins} semantics. Snapshot
+%     is destroyed after the merge
+%     \item \texttt{query\_dump} then iterates \texttt{g\_dirty\_ds\_cumulative} and outputs
+%     its contents.
+%     \item Suited to \textbf{final-copy migration}, as a single dump identifies every page
+%     written to in the session. During long sessions the output can keep on growing
+% \end{itemize}
+% \end{frame}
+
+\begin{frame}[c]{Design Choices}{Query Modes: Delta vs.\ Cumulative}
+\begin{center}
+\renewcommand{\arraystretch}{1.35}
+\footnotesize
+\begin{tabular}{p{32mm} p{48mm} p{48mm}}
+\toprule
+ & \textbf{Delta Mode} & \textbf{Cumulative Mode} \\
+\midrule
+\textbf{What is reported} &
+    Pages written since the last \texttt{query\_cutover} (one epoch) &
+    All pages written since \texttt{dirty\_tracking\_start} \\
+\textbf{After \texttt{query\_dump}} &
+    Snapshot consumed; memory freed &
+    Snapshot merged into \texttt{g\_dirty\_ds\_cumulative} (first-write-wins); snapshot freed \\
+\textbf{Timestamp semantics} &
+    Timestamp of first write within the epoch &
+    Timestamp of first write across the entire session \\
+\textbf{Memory overhead} &
+    Low; bounded by writes per epoch &
+    Grows monotonically; bounded by total session writes \\
+\textbf{Suited for} &
+    Iterative \textbf{pre-copy migration} (dirty set shrinks over rounds) &
+    \textbf{Final-copy migration} (identify every written page in one dump) \\
+\bottomrule
+\end{tabular}
+\end{center}
+\vspace{2mm}
+{\small Mode is selected at \texttt{dirty\_tracking\_start} and remains fixed for the session.}
 \end{frame}
 
-\begin{frame}{Design Choices}{Query Modes (Cummulative)}
-\begin{itemize}[<+->]
-    \item \textbf{Cummulative Mode} dumps the pages written to since the start of tracking
-    \item \texttt{query\_dump} merges the frozen snapshot into 
-    \texttt{g\_dirty\_ds\_cumulative} using \textit{first-write-wins} semantics. Snapshot
-    is destroyed after the merge
-    \item \texttt{query\_dump} then iterates \texttt{g\_dirty\_ds\_cumulative} and outputs
-    its contents.
-    \item Suited to \textbf{final-copy migration}, as a single dump identifies every page
-    written to in the session. During long sessions the output can keep on growing
-\end{itemize}
-\end{frame}
+\begin{frame}[c]{Design Choices}{Concurrency Design: Lock Acquisition Order}
+\begin{center}
+\resizebox{!}{0.82\textheight}{%
+\begin{tikzpicture}[
+    lock/.style={rectangle, rounded corners=3pt, draw=black, thick,
+                 fill=blue!15, align=center, text width=44mm,
+                 minimum height=9mm, font=\scriptsize\ttfamily},
+    desc/.style={align=left, text width=68mm, font=\scriptsize},
+    flow/.style={-Latex, thick, shorten >=2pt, shorten <=2pt},
+    node distance=11mm
+]
+\node[lock] (lc)  {lifecycle\_lock};
+\node[lock, below=of lc]  (vas) {va\_spaces.lock};
+\node[lock, below=of vas] (va)  {va\_space.lock};
+\node[lock, below=of va]  (isr) {per-GPU ISR lock};
+\node[lock, below=of isr] (vab) {va\_block.lock};
+\node[lock, below=of vab] (rw)  {ds\_rwsem};
 
-\begin{frame}{Design Choices}{Concurrency Design}
-\begin{itemize}[<+->]
-    \item \texttt{ds\_rwsem} -- shared on fault-handler inserts/lookups and
-    \texttt{query\_dump}; exclusive only for init/destroy and the cutover
-    pointer swap
-    \item \texttt{lifecycle\_lock} -- mutex serialising all procfs lifecycle
-    operations
-    \item \texttt{va\_spaces.lock} + \texttt{va\_space->lock} -- held across
-    the downgrade walk to close the active-before-downgrade and
-    downgrade-before-activate races
-    \item \texttt{va\_block->lock} + per-GPU ISR lock -- query barrier locks
-    all replayable-fault ISRs and drains the fault buffer for a precise
-    cutover/pause boundary
-    \item \texttt{WRITE\_ONCE}/\texttt{READ\_ONCE} on the tracking-active
-    flag; backend-level locks (xarray \texttt{xa\_cmpxchg}, unsorted-vector
-    IRQ spinlock)
-    \item \textbf{Lock order}: \texttt{lifecycle\_lock} $\to$
-    \texttt{va\_spaces.lock} $\to$ \texttt{va\_space.lock} $\to$ ISR $\to$
-    \texttt{va\_block.lock} $\to$ \texttt{ds\_rwsem}
-\end{itemize}
+\node[desc, right=16mm of lc]  {Mutex; serialises \emph{all} procfs lifecycle operations};
+\node[desc, right=16mm of vas] {Held across the global VA space walk};
+\node[desc, right=16mm of va]  {Closes active-before-downgrade \& downgrade-before-activate races};
+\node[desc, right=16mm of isr] {Query barrier: locks all replayable-fault ISRs and drains the fault buffer for a precise epoch boundary};
+\node[desc, right=16mm of vab] {Held per VA block during PTE downgrade/restore};
+\node[desc, right=16mm of rw]  {Shared for fault-handler inserts/lookups and \texttt{query\_dump}; exclusive for init/destroy and the cutover pointer swap};
+
+\draw[flow] (lc)  -- (vas);
+\draw[flow] (vas) -- (va);
+\draw[flow] (va)  -- (isr);
+\draw[flow] (isr) -- (vab);
+\draw[flow] (vab) -- (rw);
+\end{tikzpicture}
+}
+\end{center}
+\vspace{1mm}
+{\scriptsize \texttt{WRITE\_ONCE}/\texttt{READ\_ONCE} on the \texttt{active} flag;
+backend locks (\texttt{xa\_cmpxchg}, unsorted-vector IRQ spinlock)
+are acquired inside \texttt{ds\_rwsem}.}
 \end{frame}
 
 \section{Data Structures and Associated Operations}
@@ -481,24 +484,24 @@
 \end{itemize}
 \end{frame}
 
-\begin{frame}{Data Structures and Associated Operations}{Container Details}
-\begin{itemize}[<+->]
-    \item \texttt{struct uvm\_dirty\_ds} holds three fields: \texttt{ops}
-    (backend vtable), \texttt{priv} (backend-private allocation), and
-    \texttt{stats}
-    \item \texttt{ops} is a compile-time constant; switching backend is a
-    one-line change to the static initialiser of \texttt{g\_dirty\_ds}
-    \item \texttt{priv} is \texttt{NULL} when the table is not initialised
-    -- used by \texttt{uvm\_dirty\_tracking\_started()} to probe session
-    state
-    \item \textbf{Ops vtable}: \texttt{init}, \texttt{insert},
-    \texttt{lookup}, \texttt{for\_each\_in\_range}, \texttt{destroy}; all
-    backends enforce first-write-wins
-    \item \textbf{Inline timing wrappers} in \texttt{uvm\_dirty\_ds.h} bump
-    atomic counters/latency, gated by \texttt{unlikely(stats.enabled)} so
-    the disabled path has no measurable overhead
-\end{itemize}
-\end{frame}
+% \begin{frame}{Data Structures and Associated Operations}{Container Details}
+% \begin{itemize}[<+->]
+%     \item \texttt{struct uvm\_dirty\_ds} holds three fields: \texttt{ops}
+%     (backend vtable), \texttt{priv} (backend-private allocation), and
+%     \texttt{stats}
+%     \item \texttt{ops} is a compile-time constant; switching backend is a
+%     one-line change to the static initialiser of \texttt{g\_dirty\_ds}
+%     \item \texttt{priv} is \texttt{NULL} when the table is not initialised
+%     -- used by \texttt{uvm\_dirty\_tracking\_started()} to probe session
+%     state
+%     \item \textbf{Ops vtable}: \texttt{init}, \texttt{insert},
+%     \texttt{lookup}, \texttt{for\_each\_in\_range}, \texttt{destroy}; all
+%     backends enforce first-write-wins
+%     \item \textbf{Inline timing wrappers} in \texttt{uvm\_dirty\_ds.h} bump
+%     atomic counters/latency, gated by \texttt{unlikely(stats.enabled)} so
+%     the disabled path has no measurable overhead
+% \end{itemize}
+% \end{frame}
 
 \begin{frame}{Data Structures and Associated Operations}{Backend Implementations}
 \begin{center}
