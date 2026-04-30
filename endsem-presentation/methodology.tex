@@ -443,17 +443,19 @@
 ]
 \node[lock] (lc)  {lifecycle\_lock};
 \node[lock, below=of lc]  (vas) {va\_spaces.lock};
-\node[lock, below=of vas] (va)  {va\_space.lock};
 \node[lock, below=of va]  (isr) {per-GPU ISR lock};
+\node[lock, below=of vas] (va)  {va\_space.lock};
+% \node[lock, below=of va]  (isr) {per-GPU ISR lock};
 \node[lock, below=of isr] (vab) {va\_block.lock};
 \node[lock, below=of vab] (rw)  {ds\_rwsem};
 
 \node[desc, right=16mm of lc]  {Mutex; serialises \emph{all} procfs lifecycle operations};
-\node[desc, right=16mm of vas] {Held across the global VA space walk};
-\node[desc, right=16mm of va]  {Closes active-before-downgrade \& downgrade-before-activate races};
-\node[desc, right=16mm of isr] {Query barrier: locks all replayable-fault ISRs and drains the fault buffer for a precise epoch boundary};
-\node[desc, right=16mm of vab] {Held per VA block during PTE downgrade/restore};
-\node[desc, right=16mm of rw]  {Shared for fault-handler inserts/lookups and \texttt{query\_dump}; exclusive for init/destroy and the cutover pointer swap};
+\node[desc, right=16mm of vas] {Mutex; Held across the global VA space walk to find teh owner process};
+\node[desc, right=16mm of isr] {Semaphore; Start/resume: held during PTE downgrade + active=true setting. Pause/cutover: guarantees all in-flight faults are ds_insert-ed before the epoch boundary is sealed};
+\node[desc, right=16mm of va]  {rwsem; Protects the VA range tree structure};
+% \node[desc, right=16mm of isr] {Query barrier: locks all replayable-fault ISRs and drains the fault buffer for a precise epoch boundary};
+\node[desc, right=16mm of vab] {Mutex; Held per VA block during PTE downgrade/restore};
+\node[desc, right=16mm of rw]  {rwsem; Shared for fault-handler inserts/lookups and \texttt{query\_dump}. Exclusive for init/destroy and the cutover pointer swap};
 
 \draw[flow] (lc)  -- (vas);
 \draw[flow] (vas) -- (va);
