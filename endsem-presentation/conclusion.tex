@@ -1,13 +1,4 @@
-\section{Conclusion \& Future Work}
-
-\begin{frame}{Conclusion}
-\begin{itemize}[<+->]
-    \item The GPU fault path is a natural and sufficient instrumentation point. Dirty tracking does not require hardware extensions, compiler changes, or application modification
-    \item Forcing pages to \texttt{READ\_ONLY} and recording on the first write fault is the right primitive: it gives exact, timestamped, per-page write identity at the cost only of writes, not reads
-    \item Strong lifecycle guarantees matter more than raw performance. The determinism of \texttt{start}, \texttt{pause}, \texttt{resume}, and cutover is what makes the system trustworthy enough to drive live migration and checkpointing
-    \item Overhead is fundamentally proportional to write-fault density; compute-bound kernels that amortise faults over long runtimes see negligible cost, which is exactly the workload profile that benefits most from dirty tracking
-\end{itemize}
-\end{frame}
+\section{Future Work \& Conclusion}
 
 \begin{frame}{Key Strengths and Limitations}
 \begin{columns}[T]
@@ -24,6 +15,7 @@
 \end{itemize}
 
 \column{0.48\textwidth}
+
 \textbf{Limitations}
 \begin{itemize}[<+->]
     \scriptsize
@@ -36,8 +28,6 @@
 \end{columns}
 \end{frame}
 
-\section{Future Work}
-
 \begin{frame}{Future Work}
 \begin{itemize}[<+->]
     \item \textbf{Automatic backend selection:} PTX store instructions reveal sequential vs.\ random write patterns; this can drive automatic dispatch to the correct backend, replacing the manual \texttt{dirty\_tracking\_hint}
@@ -47,6 +37,16 @@
     \item \textbf{Dirty ratio as a scheduling signal:} Pages dirtied per epoch divided by allocation size indicates compute phase; checkpoint and migration controllers can adapt inter-round intervals entirely from user space via the existing procfs interface
 \end{itemize}
 \end{frame}
+
+\begin{frame}{Conclusion}
+\begin{itemize}[<+->]
+    \item The GPU fault path is a natural and sufficient instrumentation point. Dirty tracking does not require hardware extensions, compiler changes, or application modification
+    \item Forcing pages to \texttt{READ\_ONLY} and recording on the first write fault is the right primitive: it gives exact, timestamped, per-page write identity at the cost only of writes, not reads
+    \item Strong lifecycle guarantees matter more than raw performance. The determinism of \texttt{start}, \texttt{pause}, \texttt{resume}, and cutover is what makes the system trustworthy enough to drive live migration and checkpointing
+    \item Overhead is fundamentally proportional to write-fault density; compute-bound kernels that amortise faults over long runtimes see negligible cost, which is exactly the workload profile that benefits most from dirty tracking
+\end{itemize}
+\end{frame}
+
 
 \begin{frame}{Thank You}
 \begin{center}
