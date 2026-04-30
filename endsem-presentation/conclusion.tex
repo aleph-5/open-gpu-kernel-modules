@@ -21,7 +21,7 @@
     \scriptsize
     \item \textbf{Write-heavy workloads are expensive:} overhead scales with write-fault density - 4K-stride reaches $+1688\%$ at 40\,GB; the system is unsuitable for write-intensive kernels with large working sets
     \item \textbf{Single-session:} only one PID may hold an active session (\texttt{EBUSY} on concurrent start)
-    \item \textbf{Oversubscription amplification:} at $\geq$32\,GB, GEMM's regime shift spikes overhead to 207--267\% across all backends, exposing a coupling between UVM eviction pressure and tracking cost
+    \item \textbf{CPU-writes to UVM:} CPU writes to UVM pages are not tracked; the system is designed for tracking GPU writes
     \item \textbf{Manual backend selection:} the \texttt{dirty\_tracking\_hint} requires the caller to know the access pattern; no automatic dispatch is implemented, could have a dynamic management
 \end{itemize}
 
