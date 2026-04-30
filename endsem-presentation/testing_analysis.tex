@@ -114,8 +114,8 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 \begin{itemize}[<+->]
 \tiny
 \item Overhead scales with \textbf{write-fault density}. 
-\item 4K-stride hits every page fresh the entries are pushed back to maintain the sorting so high overhead. 
-\item Sequential writes have the same total faults but are coalased, so lower overhead.
+\item 4K-stride hits every page fresh and each thread in a warp faults a different page, so the fault handler is invoked once per thread per page.
+\item Sequential writes coalesce: multiple threads fault on the same page, so one fault service handles all these threads. Fewer handler invocations.
 \end{itemize}
 \end{frame}
 
