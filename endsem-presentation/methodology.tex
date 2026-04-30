@@ -443,24 +443,22 @@
 ]
 \node[lock] (lc)  {lifecycle\_lock};
 \node[lock, below=of lc]  (vas) {va\_spaces.lock};
-\node[lock, below=of va]  (isr) {per-GPU ISR lock};
-\node[lock, below=of vas] (va)  {va\_space.lock};
-% \node[lock, below=of va]  (isr) {per-GPU ISR lock};
-\node[lock, below=of isr] (vab) {va\_block.lock};
+\node[lock, below=of vas] (isr) {per-GPU ISR lock};
+\node[lock, below=of isr] (va)  {va\_space.lock};
+\node[lock, below=of va]  (vab) {va\_block.lock};
 \node[lock, below=of vab] (rw)  {ds\_rwsem};
 
 \node[desc, right=16mm of lc]  {Mutex; serialises \emph{all} procfs lifecycle operations};
-\node[desc, right=16mm of vas] {Mutex; Held across the global VA space walk to find teh owner process};
-\node[desc, right=16mm of isr] {Semaphore; Start/resume: held during PTE downgrade + active=true setting. Pause/cutover: guarantees all in-flight faults are ds_insert-ed before the epoch boundary is sealed};
-\node[desc, right=16mm of va]  {rwsem; Protects the VA range tree structure};
-% \node[desc, right=16mm of isr] {Query barrier: locks all replayable-fault ISRs and drains the fault buffer for a precise epoch boundary};
-\node[desc, right=16mm of vab] {Mutex; Held per VA block during PTE downgrade/restore};
-\node[desc, right=16mm of rw]  {rwsem; Shared for fault-handler inserts/lookups and \texttt{query\_dump}. Exclusive for init/destroy and the cutover pointer swap};
+\node[desc, right=16mm of vas] {Mutex; held across the global VA space walk to find the owner process};
+\node[desc, right=16mm of isr] {Semaphore; start/resume: held during PTE downgrade + \texttt{active=true} setting. Pause/cutover: guarantees all in-flight faults are \texttt{ds\_insert}-ed before the epoch boundary is sealed};
+\node[desc, right=16mm of va]  {rwsem; protects the VA range tree structure; write lock blocks fault handlers during downgrade, read lock during restore};
+\node[desc, right=16mm of vab] {Mutex; held per VA block during PTE downgrade/restore and fault servicing};
+\node[desc, right=16mm of rw]  {rwsem; shared for fault-handler inserts/lookups and \texttt{query\_dump}. Exclusive for init/destroy and the cutover pointer swap};
 
 \draw[flow] (lc)  -- (vas);
-\draw[flow] (vas) -- (va);
-\draw[flow] (va)  -- (isr);
-\draw[flow] (isr) -- (vab);
+\draw[flow] (vas) -- (isr);
+\draw[flow] (isr) -- (va);
+\draw[flow] (va)  -- (vab);
 \draw[flow] (vab) -- (rw);
 \end{tikzpicture}
 }
