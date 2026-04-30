@@ -182,8 +182,8 @@ PolyBench and Rodinia workloads use \texttt{cudaMallocManaged} with oversubscrip
 16\,GB   & $+1108.2\%$  & $+457.9\%$  & $+13.0\%$   & $+11.2\%$ & $+191.0\%$  & $+178.4\%$  & $+871.5\%$ \\
 32\,GB   & $+1537.6\%$  & $+630.0\%$  & $+207.6\%$  & $+9.8\%$  & $+257.9\%$  & $+265.2\%$  & $+0.6\%$   \\
 40\,GB   & $+1688.3\%$  & $+703.2\%$  & $+258.8\%$  & $+9.1\%$  & $+264.6\%$  & $+257.0\%$  & $+19.1\%$  \\
-\textit{48\,GB}$^\dagger$ & \textit{$+1730.7\%$} & \textit{$+699.4\%$} & \textit{$+213.1\%$} & \textit{---} & \textit{$+263.6\%$} & \textit{$+290.6\%$} & \textit{$+27.8\%$} \\
-\textit{64\,GB}$^\dagger$ & \textit{$+1547.1\%$} & \textit{$+648.6\%$} & \textit{$+261.6\%$} & \textit{---} & \textit{$+208.4\%$} & \textit{$+253.5\%$} & \textit{$+11.8\%$} \\
+\textit{48\,GB}$^\dagger$ & \textit{$+1730.7\%$} & \textit{$+699.4\%$} & \textit{$+213.1\%$} & \textit{-} & \textit{$+263.6\%$} & \textit{$+290.6\%$} & \textit{$+27.8\%$} \\
+\textit{64\,GB}$^\dagger$ & \textit{$+1547.1\%$} & \textit{$+648.6\%$} & \textit{$+261.6\%$} & \textit{-} & \textit{$+208.4\%$} & \textit{$+253.5\%$} & \textit{$+11.8\%$} \\
 \bottomrule
 \end{tabular}
 
@@ -284,19 +284,20 @@ $n_c=$ entries in active chunk.}
 \midrule
 512\,MB              & $+36.6\%$   & $+57.5\%$   & $+900.8\%$   & $+247.9\%$   & $+48.6\%$   & $917.4\%$ \\
 4\,GB                & $+272.0\%$  & $+372.3\%$  & $+27730.1\%$ & $+16951.0\%$ & $+263.6\%$  & - \\
-8\,GB                & $+462.1\%$  & $+659.9\%$  & OOM          & OOM          & $+456.8\%$  & - \\
-16\,GB               & $+680.8\%$  & $+1108.2\%$ & OOM          & OOM          & $+689.3\%$  & - \\
-32\,GB               & $+981.1\%$  & $+1537.6\%$ & OOM          & OOM          & $+914.0\%$  & - \\
-40\,GB               & $+1046.0\%$ & $+1688.3\%$ & OOM          & OOM          & $+1001.2\%$ & - \\
+8\,GB                & $+462.1\%$  & $+659.9\%$  & -            & OOM          & $+456.8\%$  & - \\
+16\,GB               & $+680.8\%$  & $+1108.2\%$ & -            & OOM          & $+689.3\%$  & - \\
+32\,GB               & $+981.1\%$  & $+1537.6\%$ & -            & OOM          & $+914.0\%$  & - \\
+40\,GB               & $+1046.0\%$ & $+1688.3\%$ & -            & OOM          & $+1001.2\%$ & - \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & $+1038.7\%$ & $+1730.7\%$ & OOM          & OOM          & $+922.9\%$  & - \\
+48\,GB$^\dagger$     & $+1038.7\%$ & $+1730.7\%$ & -            & OOM          & $+922.9\%$  & - \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & $+942.0\%$  & $+1547.1\%$ & OOM          & OOM          & $+921.0\%$  & - \\
+64\,GB$^\dagger$     & $+942.0\%$  & $+1547.1\%$ & -            & OOM          & $+921.0\%$  & - \\
 \bottomrule
 \end{tabular}
 
 \vspace{1mm}
 {\tiny Vec.-U\,=\,Vector Unsorted; Nested BM\,=\,Nested Bitmap. 5-run average, tracking ON vs.\ OFF.
+OOM\,=\,Out of memory.
 $^\dagger$~Oversubscribed.}
 \end{center}
 \end{frame}
@@ -311,7 +312,7 @@ $^\dagger$~Oversubscribed.}
 \begin{itemize}[<+->]
 \tiny
 \item At $\leq$16\,GB all scalable backends cluster in the \textbf{13--30\% band}: long compute time amortises tracking cost, so insert latency is irrelevant
-\item Regime shift at $\geq$32\,GB spikes \textbf{all backends equally} to 207--267\% --- benchmark-internal, not a tracking effect
+\item Regime shift at $\geq$32\,GB spikes \textbf{all backends equally} to 207--267\% - benchmark-internal, not a tracking effect
 \item \textbf{Linked List} $>$1{,}000\% at 4\,GB consistent with $O(n)$ insert; \textbf{Chunked}'s poor insert performance invisible at low fault counts but explodes above 4\,GB
 \end{itemize}
 \end{frame}
@@ -343,13 +344,13 @@ $^\dagger$~Oversubscribed.}
 512\,MB              & $+26.3\%$  & $+26.0\%$  & $-93.3\%$  & $+30.3\%$  & $+23.9\%$ & $+161.2\%$ \\
 4\,GB                & $+24.7\%$  & $+19.3\%$  & $+380.8\%$ & $+103.1\%$ & $+25.4\%$ & $+1147.3\%$ \\
 8\,GB                & $+17.1\%$  & $+15.1\%$  & $+551.3\%$ & $+137.3\%$ & $+20.9\%$ & - \\
-16\,GB               & $+13.6\%$  & $+13.0\%$  & OOM        & $+287.3\%$ & $+13.4\%$ & - \\
-32\,GB               & $+266.8\%$ & $+207.6\%$ & OOM        & OOM        & OOM       & - \\
-40\,GB               & $+256.1\%$ & $+258.8\%$ & OOM        & OOM        & OOM       & - \\
+16\,GB               & $+13.6\%$  & $+13.0\%$  & -          & $+287.3\%$ & $+13.4\%$ & - \\
+32\,GB               & $+266.8\%$ & $+207.6\%$ & -          & OOM        & OOM       & - \\
+40\,GB               & $+256.1\%$ & $+258.8\%$ & -          & OOM        & OOM       & - \\
 \rowcolor[gray]{0.92}
-48\,GB$^\dagger$     & $+259.3\%$ & $+213.1\%$ & OOM        & OOM        & OOM       & - \\
+48\,GB$^\dagger$     & $+259.3\%$ & $+213.1\%$ & -          & OOM        & OOM       & - \\
 \rowcolor[gray]{0.92}
-64\,GB$^\dagger$     & $+266.2\%$ & $+261.6\%$ & OOM        & OOM        & OOM       & - \\
+64\,GB$^\dagger$     & $+266.2\%$ & $+261.6\%$ & -          & OOM        & OOM       & - \\
 \bottomrule
 \end{tabular}
 

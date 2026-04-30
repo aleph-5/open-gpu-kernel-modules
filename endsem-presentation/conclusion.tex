@@ -19,7 +19,7 @@
     \item \textbf{Zero application footprint:} tracking is entirely kernel-side; no recompile, no runtime library, no hardware extensions required
     \item \textbf{Exact semantics:} first-write-wins with nanosecond timestamps gives a roughly ordered write identity per page
     \item \textbf{Deterministic lifecycle:} ISR flush + TLB drain at every boundary ensures no write straddles an epoch; all correctness tests pass including concurrency and lifecycle-race suites
-    \item \textbf{No fixed overhead floor:} cost is strictly proportional to write-fault density --- compute-bound kernels (GEMM $\leq$16\,GB: 13--26\%) pay negligible cost
+    \item \textbf{No fixed overhead floor:} cost is strictly proportional to write-fault density - compute-bound kernels (GEMM $\leq$16\,GB: 13--26\%) pay negligible cost
     \item \textbf{O(1) query overhead:} delta-mode \texttt{query\_dump} swaps a pointer; querying more frequently does not add measurable cost
 \end{itemize}
 
@@ -27,7 +27,7 @@
 \textbf{Limitations}
 \begin{itemize}[<+->]
     \scriptsize
-    \item \textbf{Write-heavy workloads are expensive:} overhead scales with write-fault density --- 4K-stride reaches $+1688\%$ at 40\,GB; the system is unsuitable for write-intensive kernels with large working sets
+    \item \textbf{Write-heavy workloads are expensive:} overhead scales with write-fault density - 4K-stride reaches $+1688\%$ at 40\,GB; the system is unsuitable for write-intensive kernels with large working sets
     \item \textbf{Single-session:} only one PID may hold an active session (\texttt{EBUSY} on concurrent start)
     \item \textbf{Oversubscription amplification:} at $\geq$32\,GB, GEMM's regime shift spikes overhead to 207--267\% across all backends, exposing a coupling between UVM eviction pressure and tracking cost
     \item \textbf{Manual backend selection:} the \texttt{dirty\_tracking\_hint} requires the caller to know the access pattern; no automatic dispatch is implemented, could have a dynamic management
